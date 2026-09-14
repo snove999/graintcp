@@ -1,0 +1,33 @@
+// GrainTCP Workers 部署配置（wrangler v4+）
+// 用法：
+//   wrangler d1 create graintcp          # 把返回的 database_id 填到下面
+//   wrangler d1 execute graintcp --remote --file=schema.sql
+//   wrangler secret put UUID             # 或写在下方 [vars]
+//   wrangler deploy
+// 默认部署混淆版 worker.obf.js；想跑明文版把 main 改成 "worker.js"
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "graintcp-proxy",
+  "main": "worker.obf.js",
+  "compatibility_date": "2026-09-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "graintcp",
+      "database_id": "00000000-0000-0000-0000-000000000000" // ← 替换为你的 D1 database_id
+    }
+  ],
+  "triggers": {
+    "crons": ["0 */6 * * *"] // TG 用量推送节奏，配合 STATS_ENABLED=true
+  },
+  "vars": {
+    // 非敏感变量可写这里；UUID 等敏感值建议用 `wrangler secret put`
+    // "UUID": "",
+    // "PROXYIP": "",
+    // "SUB_PASSWORD": "",
+    // "DLS": "7",
+    // "CONCUR": "4"
+  }
+  // 环境变量优先级：环境变量 > D1 config 表（面板保存）> 代码默认值
+  // 全部变量见 README「主要环境变量」表
+}
