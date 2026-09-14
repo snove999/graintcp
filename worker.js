@@ -1278,14 +1278,73 @@ function pCfg(url, path, fbPIP = null) {
 /* ---------- GrainTCP 原生建连：单路 + 4 路竞速 ---------- */
 const sprout = (f, h, p, s = f.connect({ hostname: h, port: p })) => { let d = !1; return new Promise((res, rej) => { const c = setTimeout(() => { if (!d) { d = !0; try { s.close() } catch {} rej(new Error("TO")) } }, 12e3); s.opened.then(o => { if (!d) { d = !0; clearTimeout(c); res(s) } }, e => { if (!d) { d = !0; clearTimeout(c); rej(e) } }) }) };
 
-const raceSprout = (f, h, p) => {
-  if (!f?.connect) return Promise.reject(new Error('connect unavailable'));
-  if (CFG.concur <= 1) return sprout(f, h, p);
-  const ts = Array(CFG.concur).fill().map(() => sprout(f, h, p));
-  return Promise.any(ts).then(w => {
-    ts.forEach(t => t.then(s => s !== w && s.close(), () => {}));
-    return w;
-  });
+/* ---------- DoH JSON 查询（EDT 对齐：直连预解析与反代池展开共用；120s 缓存，5s 超时，双端点回退） ---------- */
+const _dohCache = new Map();
+const _dohQ = async (name, type) => {
+  const key = type + ':' + String(name || '').toLowerCase().replace(/\.$/, '');
+  const now = Date.now();
+  const c = _dohCache.get(key);
+  if (c && now - c.t < 120000) return c.l;
+  let out = [];
+  for (const ep of ['https://cloudflare-dns.com/dns-query', 'https://dns.alidns.com/resolve']) {
+    try {
+      const r = await fetch(ep + '?name=' + encodeURIComponent(name) + '&type=' + type, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(5000) });
+      if (!r.ok) continue;
+      out = ((await r.json()).Answer || []).map(x => String(x.data));
+      if (out.length) break;
+    } catch (e) {}
+  }
+  _dohCache.set(key, { l: out, t: now });
+  if (_dohCache.size > 200) _dohCache.clear();
+  return out;
+};
+const _v4 = s => { s = String(s || '').replace(/\.$/, ''); return /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(s) ? s : null; };
+const _isIpHost = h => _v4(h) || String(h).includes(':');
+/* 反代地址展开（EDT「解析地址端口」对齐：域名 TXT 池优先，兼容 !txt 后缀；180s 缓存） */
+const PIP_TP1 = ['proxyip.tp1.090227.xyz', 1]; // CMLiu 生态按机房寻找服务（EDT 同款末级兜底）
+const _pipCache = new Map();
+const pipExpand = async pIP => {
+  const a = String(pIP.address || '').replace(/!txt$/i, '').trim();
+  const key = a.toLowerCase() + ':' + (+pIP.port || 443);
+  const now = Date.now();
+  const c = _pipCache.get(key);
+  if (c && now - c.t < 180000) return c.l;
+  let list = [];
+  if (!_isIpHost(a)) {
+    try {
+      list = (await _dohQ(a, 'TXT')).flatMap(d => String(d).replace(/^"|"$/g, '').replace(/\\010/g, ',').split(','))
+        .map(s => s.trim()).filter(Boolean).slice(0, 6)
+        .map(s => { const [h2, p2] = parseAddressPort(s); return [h2, +p2 || 443]; });
+    } catch (e) {}
+  }
+  if (!list.length) list = [[a, +pIP.port || 443]];
+  _pipCache.set(key, { l: list, t: now });
+  if (_pipCache.size > 200) _pipCache.clear();
+  return list;
+};
+/* 竞速拨号（EDT 预加载竞速对齐：域名先 DoH A/AAAA 解析成字面 IP 再竞速——CF 目标对字面 IP 被同步拒绝，快速回落反代链） */
+const raceSprout = async (f, h, p) => {
+  if (!f?.connect) throw new Error('connect unavailable');
+  let targets = null;
+  if (!_isIpHost(h)) {
+    const key = 'H:' + h.toLowerCase();
+    const now = Date.now();
+    const c = _dohCache.get(key);
+    if (c && now - c.t < 120000) targets = c.l;
+    else {
+      try {
+        const a4 = (await _dohQ(h, 'A')).map(_v4).filter(Boolean);
+        let a6 = a4.length >= CFG.concur ? [] : (await _dohQ(h, 'AAAA')).map(s => String(s).replace(/\.$/, '')).filter(x => x.includes(':') && !x.includes('.')).map(x => '[' + x + ']');
+        targets = [...new Set(a4.concat(a6))].slice(0, Math.max(+CFG.concur || 1, 1));
+        _dohCache.set(key, { l: targets, t: now });
+      } catch (e) { targets = []; }
+    }
+  }
+  const ts = (targets && targets.length ? targets : [h]).map(x => sprout(f, x, p));
+  if (ts.length === 1) return ts[0];
+  const w = await Promise.any(ts);
+  ts.forEach(t => t.then(s => s !== w && s.close(), () => {}));
+  return w;
 };
 
 /* ---------- 按 order 回落建连 ---------- */
@@ -1319,7 +1378,12 @@ const tryCon = async (fetcher, addrType, host, port, routeCfg) => {
           : await htConn(fetcher, addrType, host, port, s5);
       }
       if (method === 'proxy' && pIP) {
-        return await sprout(fetcher, pIP.address, pIP.port);
+        const raceList = list => {
+          const ts = list.map(([h2, p2]) => sprout(fetcher, h2, p2));
+          return Promise.any(ts).then(w => { ts.forEach(t => t.then(s => s !== w && s.close(), () => {})); return w; });
+        };
+        try { return await raceList(await pipExpand(pIP)); }
+        catch (e) { lastErr = e; return await raceList([PIP_TP1]); }
       }
     } catch (error) {
       lastErr = error;

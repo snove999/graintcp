@@ -49,6 +49,14 @@ globalThis.WebSocketPair = class {
   get 1() { return this.server; }
 };
 
+// DoH 拦截桩：默认空应答（直连预解析回退 hostname、反代回退原地址，保持旧行为确定性）；专项测试块内覆盖
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, opts) => {
+  const u = String(url instanceof URL ? url : url?.url || url);
+  if (/dns-query|\/resolve/.test(u) && /[?&]name=/.test(u)) return new RealResponse(JSON.stringify({ Answer: [] }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+  return realFetch(url, opts);
+};
+
 // fake TCP socket（字节流，支持 BYOB）
 let connectLog = [];
 function makeTargetSocket(host, port) {
@@ -696,6 +704,73 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     check('worker getCustomIPs：并行抓取顺序保持且单源失败不影响', gIPs.length === 4 && gIPs[0] === 'ip-slow-a#慢源' && gIPs.includes('ip-slow-b') && gIPs.includes('ip-fast-a') && gIPs.includes('ip-fast-b'), gIPs.join(','));
     check('worker getCustomIPs：并行耗时低于串行累加', Date.now() - t0 < 200, (Date.now() - t0) + 'ms');
   } catch (e) { check('worker getCustomIPs 测试', false, e.message); }
+
+  // 反代链 EDT 对齐：TXT 池展开竞速 / tp1 寻找服务兜底 / 直连 DoH 预解析（worker + snippets）
+  try {
+    const wUuid = '06b65903-406d-4a41-8463-6fd5c0ee7798';
+    const dohMock = (name, type) => {
+      const n = String(name).toLowerCase().replace(/\.$/, '');
+      if (n === 'pool.test' && type === 'TXT') return { Answer: [{ type: 16, data: '"1.2.3.4:11485,5.6.7.8"' }] };
+      if (n === 'multi.test' && type === 'A') return { Answer: [{ type: 1, data: '9.9.9.9' }, { type: 1, data: '8.8.8.8' }] };
+      return {};
+    };
+    globalThis.fetch = async (url) => {
+      const u = String(url instanceof URL ? url : url?.url || url);
+      const m = u.match(/[?&]name=([^&]+)&type=([A-Za-z]+)/);
+      if (m && /dns-query|\/resolve/.test(u)) return new Response(JSON.stringify(dohMock(decodeURIComponent(m[1]), m[2])), { status: 200 });
+      return new Response('nf', { status: 404 });
+    };
+    const mkFailFetcher = (failHosts) => ({ connect(a) {
+      const host = typeof a === 'string' ? a : a.hostname;
+      const port = typeof a === 'string' ? 443 : (a.port ?? 443);
+      const s = makeTargetSocket(host, port);
+      if (failHosts.includes(host)) s.opened = Promise.reject(new Error('blocked'));
+      connectLog.push(s);
+      return s;
+    } });
+    // worker：/proxyip=域名 → TXT 池展开竞速（直连先败）
+    connectLog = []; __pairs.length = 0;
+    const reqP = stubRequest('https://w.test/proxyip=pool.test', { 'Upgrade': 'websocket' });
+    reqP.fetcher = mkFailFetcher(['real-target.org']);
+    await WK._ws(reqP, {});
+    const pairP = __pairs[__pairs.length - 1];
+    pairP.server._onmessage(vlessFrame(wUuid, 'real-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('worker /proxyip=域名：TXT 池展开竞速建连', connectLog.some(s => s.host === '1.2.3.4' && s.port === 11485) && !connectLog.some(s => s.host === 'proxyip.tp1.090227.xyz'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    pairP.client.close();
+    // worker：池全败 → tp1 寻找服务兜底
+    connectLog = []; __pairs.length = 0;
+    const reqT = stubRequest('https://w.test/proxyip=pool.test', { 'Upgrade': 'websocket' });
+    reqT.fetcher = mkFailFetcher(['real-target.org', '1.2.3.4', '5.6.7.8']);
+    await WK._ws(reqT, {});
+    const pairT = __pairs[__pairs.length - 1];
+    pairT.server._onmessage(vlessFrame(wUuid, 'real-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('worker /proxyip=：池全败回退 tp1 寻找服务', connectLog.some(s => s.host === 'proxyip.tp1.090227.xyz' && s.port === 1), connectLog.map(s => s.host + ':' + s.port).join(','));
+    pairT.client.close();
+    // worker：直连 DoH 预解析（目标域名 → 字面 IP 竞速）
+    connectLog = []; __pairs.length = 0;
+    const reqM = stubRequest('https://w.test/', { 'Upgrade': 'websocket' });
+    reqM.fetcher = mkFailFetcher([]);
+    await WK._ws(reqM, {});
+    const pairM = __pairs[__pairs.length - 1];
+    pairM.server._onmessage(vlessFrame(wUuid, 'multi.test', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('worker 直连：DoH 预解析按字面 IP 竞速', connectLog.some(s => s.host === '9.9.9.9') && !connectLog.some(s => s.host === 'multi.test'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    pairM.client.close();
+    // snippets：/proxyip=域名 TXT 优先（无需 !txt 后缀，EDT 对齐）
+    const SN6 = await import(pathToFileURL(DIR + 'snippets.js').href);
+    const snipUuid6 = extractUuid(readFileSync(DIR + 'snippets.js', 'utf8').split('\n')[0]);
+    connectLog = []; __pairs.length = 0;
+    const reqS = stubRequest('https://w.test/proxyip=pool.test', { 'Upgrade': 'websocket' });
+    reqS.fetcher = mkFailFetcher(['snip-target.org']);
+    await SN6.default.fetch(reqS, undefined, { waitUntil() {} });
+    const pairS = __pairs[__pairs.length - 1];
+    pairS.server._onmessage(vlessFrame(snipUuid6, 'snip-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('snippets /proxyip=域名：TXT 优先池展开（EDT 对齐）', connectLog.some(s => (s.host === '1.2.3.4' && s.port === 11485) || s.host === '5.6.7.8'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    pairS.client.close();
+  } catch (e) { check('反代链 EDT 对齐测试', false, e.message); }
 
   globalThis.fetch = realFetch;
 }
