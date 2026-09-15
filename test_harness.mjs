@@ -146,9 +146,16 @@ const extractUuid = (line) => (line.match(/UUID="([^"]+)"/) || [0, SNIP_UUID_FAL
 
 async function loadWorker() {
   const src = readFileSync(DIR + 'worker.js', 'utf8');
-  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs };\n';
+  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS };\n';
   writeFileSync(DIR + '_worker_test.mjs', patched);
   return import(pathToFileURL(DIR + '_worker_test.mjs').href);}
+
+// snippets 侧 XH_HS 边界用例：追加命名导出（顶层名在混淆产物中同样保留）
+async function loadSnippetsXH() {
+  const src = readFileSync(DIR + 'snippets.js', 'utf8');
+  writeFileSync(DIR + '_snippets_xh.mjs', src + '\nexport { XH_HS };\n');
+  return import(pathToFileURL(DIR + '_snippets_xh.mjs').href);
+}
 
 const WK = await loadWorker();
 const { pCfg, addrParser, parseAddressPort } = WK;
@@ -773,6 +780,265 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
   } catch (e) { check('反代链 EDT 对齐测试', false, e.message); }
 
   globalThis.fetch = realFetch;
+}
+
+// ================= 7. 补盲回归：xHTTP 下行回传 × xHTTP×/proxyip= × 非法编码 =================
+// 背景：本次线上 P0（worker xHTTP 下行被 drop）能溜到线上，源于两个盲区：
+//   a) worker xHTTP 用例只验上行 payload 与 [0,0] 前缀，从未验下行回传；
+//   b) /proxyip= 用例全部只在 WS 下跑，xHTTP × /proxyip= 组合零覆盖。
+// 本节永久堵上这两个盲区，并加固非法百分号编码健壮性。worker 手工构造 req/fetcher，snippets 走 SN.default.fetch。
+console.log('\n===== 补盲回归：xHTTP 下行 × /proxyip= × 非法编码 =====');
+{
+  // 复刻既有空 DoH 桩（line 775 之后 globalThis.fetch 已还原，需显式装回，保证 hostname 反代展开确定性）
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url instanceof URL ? url : url?.url || url);
+    if (/dns-query|\/resolve/.test(u) && /[?&]name=/.test(u)) return new RealResponse(JSON.stringify({ Answer: [] }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+    return realFetch(url, opts);
+  };
+
+  const W_UUID = '06b65903-406d-4a41-8463-6fd5c0ee7798';
+  const SN_UUID = extractUuid(readFileSync(DIR + 'snippets.js', 'utf8').split('\n')[0]);
+
+  // 直连腿失败桩（复用既有 mkFailFetcher 语义：opened reject 逼出 proxy 回落）
+  const mkBlockFetcher = (failHosts) => ({ connect(a) {
+    const host = typeof a === 'string' ? a : a.hostname;
+    const port = typeof a === 'string' ? 443 : (a.port ?? 443);
+    const s = makeTargetSocket(host, port);
+    if (failHosts.includes(host)) s.opened = Promise.reject(new Error('blocked'));
+    connectLog.push(s);
+    return s;
+  } });
+  const okFetcher = { connect(a) { const s = makeTargetSocket(typeof a === 'string' ? a : a.hostname, (a && a.port) || 443); connectLog.push(s); return s; } };
+
+  // 带超时读，避免旧代码「下行被 drop → 响应体永不产出」时挂死
+  const readOr = (rdr, ms) => Promise.race([
+    rdr.read().then(v => v).catch(() => ({ value: null, error: true })),
+    new Promise(r => setTimeout(() => r({ value: null, timeout: true }), ms))
+  ]);
+
+  // 统一 xHTTP POST 请求构造：body 保持开启（供下行读取），octet-stream 走双端同一入口
+  const mkXhReq = (url, frame, fetcher) => {
+    let ctrl;
+    const body = new ReadableStream({ start(c) { c.enqueue(frame); ctrl = c; } });
+    const req = {
+      url, method: 'POST',
+      headers: { get: k => (k.toLowerCase() === 'content-type' ? 'application/octet-stream' : null) },
+      body, cf: {}, fetcher
+    };
+    return { req, close: () => { try { ctrl.close(); } catch {} } };
+  };
+
+  // 路径变体矩阵（双端共用）：覆盖明文/百分号编码/整体编码/点号/尾随斜杠/简写/中段
+  const PIP_VARIANTS = [
+    ['/proxyip=1.1.1.11', '1.1.1.11', 443],
+    ['/proxyip%3D1.1.1.12', '1.1.1.12', 443],
+    ['/%2Fproxyip%3D1.1.1.13', '1.1.1.13', 443],
+    ['/proxyip.1.1.1.14', '1.1.1.14', 443],
+    ['/proxyip=1.1.1.15/', '1.1.1.15', 443],
+    ['/ip=1.1.1.16', '1.1.1.16', 443],
+    ['/pyip=1.1.1.17', '1.1.1.17', 443],
+    ['/xh/proxyip=1.1.1.18', '1.1.1.18', 443],
+  ];
+  const DEFAULT_W = 'cmliussss'; // worker/snippets 默认反代主机名均含该片段
+
+  // ---------- 7.1 worker pCfg 路径矩阵（单元，精确断言 pIP + order 语义） ----------
+  {
+    const t = (p) => { const u = new URL('https://w.test' + p); return WK.pCfg(u, u.pathname.slice(1), 'ProxyIP.CMLiussss.net'); };
+    for (const [p, addr, port] of PIP_VARIANTS) {
+      let c = null, err = '';
+      try { c = t(p); } catch (e) { err = e.message; }
+      const ok = !err && c && c.pIP?.address === addr && c.pIP?.port === port && c.order.join() === 'direct,proxy';
+      check(`worker pCfg ${p} → pIP=${addr} + order=[direct,proxy]`, ok, err ? 'THROW ' + err : JSON.stringify({ pIP: c?.pIP, order: c?.order }));
+    }
+  }
+
+  // ---------- 7.2 worker xHTTP 下行回传（本次 P0 直接覆盖；修复前必红） ----------
+  {
+    connectLog = []; __pairs.length = 0;
+    const frame = vlessFrame(W_UUID, 'xh-down.org', 443, new Uint8Array([0x16, 3, 1, 0]));
+    const { req, close } = mkXhReq('https://w.test/xh', frame, okFetcher);
+    try {
+      const res = await WK.default.fetch(req, {}, { waitUntil() {} });
+      const rdr = res.body.getReader();
+      const first = await readOr(rdr, 800);
+      check('worker xHTTP(octet-stream) 下行：首块 VLESS 前缀 [0,0]', !!first.value && first.value[0] === 0 && first.value[1] === 0, JSON.stringify(first.value ? Array.from(first.value.slice(0, 2)) : first));
+      const target = connectLog.find(s => s.host === 'xh-down.org');
+      check('worker xHTTP 下行：远端 socket 已建连', !!target, connectLog.map(s => s.host).join(','));
+      if (target) target._push(new Uint8Array([5, 5, 5, 5]));
+      const second = await readOr(rdr, 800);
+      check('worker xHTTP 下行：远端数据回传客户端', !!second.value && second.value.length === 4 && second.value[0] === 5, JSON.stringify(second.value ? Array.from(second.value) : second));
+      check('worker xHTTP 下行：远端 socket 未被关闭', !!target && !target._isClosed(), target ? 'closed=' + target._isClosed() : 'no target');
+      rdr.cancel().catch(() => {});
+    } catch (e) { check('worker xHTTP 下行回传测试', false, e.message); }
+    close();
+  }
+
+  // ---------- 7.3 worker xHTTP × /proxyip=（组合端到端：直连腿失败 → 必须连到 path 指定反代，而非默认反代） ----------
+  for (const [p, addr, port] of PIP_VARIANTS) {
+    connectLog = []; __pairs.length = 0;
+    const targetHost = 'xh-real-' + addr.replace(/\./g, '-') + '.org';
+    const frame = vlessFrame(W_UUID, targetHost, 443, new Uint8Array([7]));
+    const { req, close } = mkXhReq('https://w.test' + p, frame, mkBlockFetcher([targetHost]));
+    try {
+      const res = await WK.default.fetch(req, {}, { waitUntil() {} });
+      await sleep(120);
+      const hit = connectLog.some(s => s.host === addr && s.port === port);
+      const fellBack = connectLog.some(s => s.host.toLowerCase().includes(DEFAULT_W));
+      check(`worker xHTTP ${p} → 反代 ${addr}:${port}（非默认反代）`, res.status === 200 && hit && !fellBack, `status=${res.status} log=${connectLog.map(s => s.host + ':' + s.port).join(',')}`);
+    } catch (e) { check(`worker xHTTP ${p} → 反代 ${addr}:${port}（非默认反代）`, false, e.message); }
+    close();
+  }
+
+  // ---------- 7.4 snippets xHTTP × /proxyip=（同一路径矩阵，双端一致性） ----------
+  const SN = await import(pathToFileURL(DIR + 'snippets.js').href);
+  for (const [p, addr, port] of PIP_VARIANTS) {
+    connectLog = []; __pairs.length = 0;
+    const targetHost = 'sn-real-' + addr.replace(/\./g, '-') + '.org';
+    const frame = vlessFrame(SN_UUID, targetHost, 443, new Uint8Array([7]));
+    const { req, close } = mkXhReq('https://w.test' + p, frame, mkBlockFetcher([targetHost]));
+    try {
+      const res = await SN.default.fetch(req, undefined, { waitUntil() {} });
+      await sleep(120);
+      const hit = connectLog.some(s => s.host === addr && s.port === port);
+      const fellBack = connectLog.some(s => s.host.toLowerCase().includes(DEFAULT_W));
+      check(`snippets xHTTP ${p} → 反代 ${addr}:${port}（非默认反代）`, res.status === 200 && hit && !fellBack, `status=${res.status} log=${connectLog.map(s => s.host + ':' + s.port).join(',')}`);
+    } catch (e) { check(`snippets xHTTP ${p} → 反代 ${addr}:${port}（非默认反代）`, false, e.message); }
+    close();
+  }
+
+  // ---------- 7.5 snippets xHTTP 下行回传（镜像，octet-stream 入口） ----------
+  {
+    connectLog = []; __pairs.length = 0;
+    const frame = vlessFrame(SN_UUID, 'sn-xh-down.org', 443, new Uint8Array([0x16, 3, 1, 0]));
+    const { req, close } = mkXhReq('https://w.test/xh', frame, okFetcher);
+    try {
+      const res = await SN.default.fetch(req, undefined, { waitUntil() {} });
+      const rdr = res.body.getReader();
+      const first = await readOr(rdr, 800);
+      check('snippets xHTTP(octet-stream) 下行：首块 [0,0]', !!first.value && first.value[0] === 0 && first.value[1] === 0, JSON.stringify(first.value ? Array.from(first.value.slice(0, 2)) : first));
+      const target = connectLog.find(s => s.host === 'sn-xh-down.org');
+      if (target) target._push(new Uint8Array([6, 6, 6]));
+      const second = await readOr(rdr, 800);
+      check('snippets xHTTP 下行：远端数据回传客户端', !!second.value && second.value.length === 3 && second.value[0] === 6, JSON.stringify(second.value ? Array.from(second.value) : second));
+      check('snippets xHTTP 下行：远端 socket 未被关闭', !!target && !target._isClosed(), target ? 'closed=' + target._isClosed() : 'no target');
+      rdr.cancel().catch(() => {});
+    } catch (e) { check('snippets xHTTP 下行回传测试', false, e.message); }
+    close();
+  }
+
+  // ---------- 7.6 非法百分号编码健壮性（不抛异常 / 不 500 / 路由可预期） ----------
+  {
+    const BAD = ['%', '%zz', '%E0%A4%A'];
+    // worker pCfg 单元：非法编码必须安全降级（保留原值），返回结构完整、order 非空
+    let unitOk = true, unitInfo = [];
+    for (const b of BAD) {
+      try {
+        const u = new URL('https://w.test/' + b);
+        const c = WK.pCfg(u, u.pathname.slice(1), 'ProxyIP.CMLiussss.net');
+        const good = c && Array.isArray(c.order) && c.order.length > 0;
+        if (!good) unitOk = false;
+        unitInfo.push(b + '=>' + JSON.stringify({ pIP: c?.pIP, order: c?.order }));
+      } catch (e) { unitOk = false; unitInfo.push(b + '=>THROW ' + e.message); }
+    }
+    check('worker pCfg 非法百分号编码不抛异常（%/%zz/%E0%A4%A）', unitOk, unitInfo.join(' | '));
+
+    // worker xHTTP e2e：非法编码路径不得 500 / 不得崩溃
+    for (const b of BAD) {
+      connectLog = []; __pairs.length = 0;
+      const frame = vlessFrame(W_UUID, 'xh-enc.org', 443, new Uint8Array([7]));
+      const { req, close } = mkXhReq('https://w.test/' + b, frame, okFetcher);
+      let status = 0, err = '';
+      try { const res = await WK.default.fetch(req, {}, { waitUntil() {} }); status = res.status; } catch (e) { err = e.message; }
+      check(`worker xHTTP 非法编码 "${b}"：正常放行 200 不崩溃`, !err && status === 200, err ? 'THROW ' + err : 'status=' + status);
+      close();
+    }
+    // snippets xHTTP e2e：同断言
+    for (const b of BAD) {
+      connectLog = []; __pairs.length = 0;
+      const frame = vlessFrame(SN_UUID, 'sn-enc.org', 443, new Uint8Array([7]));
+      const { req, close } = mkXhReq('https://w.test/' + b, frame, okFetcher);
+      let status = 0, err = '';
+      try { const res = await SN.default.fetch(req, undefined, { waitUntil() {} }); status = res.status; } catch (e) { err = e.message; }
+      check(`snippets xHTTP 非法编码 "${b}"：正常放行 200 不崩溃`, !err && status === 200, err ? 'THROW ' + err : 'status=' + status);
+      close();
+    }
+  }
+
+  // ---------- 7.6b `%3F` 预解码 + 非法编码（本次缺陷的原始触发路径：URIError → 500）----------
+  // 双端 4 条入口：worker/snippets × ws/xhF。修复前 decodeURIComponent 未包 try → 抛 URIError → 顶层 catch 返回 500。
+  {
+    const QBAD = ['x%3F%zz', 'x%3F%', 'x%3F%E0%A4%A'];
+    // worker ws 入口（成功=101）
+    for (const b of QBAD) {
+      connectLog = []; __pairs.length = 0;
+      const frame = vlessFrame(W_UUID, 'xh-q.org', 443);
+      const req = stubRequest('https://w.test/' + b, { 'Upgrade': 'websocket', 'sec-websocket-protocol': Buffer.from(frame).toString('base64url') });
+      let status = 0, err = '';
+      try { const res = await WK.default.fetch(req, {}, { waitUntil() {} }); status = res.status; } catch (e) { err = e.message; }
+      check(`worker ws 入口 "%3F+非法编码 ${b}"：正常建连 101 不崩溃`, !err && status === 101, err ? 'THROW ' + err : 'status=' + status);
+    }
+    // worker xhF 入口（成功=200）
+    for (const b of QBAD) {
+      connectLog = []; __pairs.length = 0;
+      const frame = vlessFrame(W_UUID, 'xh-q2.org', 443, new Uint8Array([7]));
+      const { req, close } = mkXhReq('https://w.test/' + b, frame, okFetcher);
+      let status = 0, err = '';
+      try { const res = await WK.default.fetch(req, {}, { waitUntil() {} }); status = res.status; } catch (e) { err = e.message; }
+      check(`worker xhF 入口 "%3F+非法编码 ${b}"：正常放行 200 不崩溃`, !err && status === 200, err ? 'THROW ' + err : 'status=' + status);
+      close();
+    }
+    // snippets ws 入口（成功=101）
+    for (const b of QBAD) {
+      connectLog = []; __pairs.length = 0;
+      const frame = vlessFrame(SN_UUID, 'sn-q.org', 443);
+      const req = stubRequest('https://w.test/' + b, { 'Upgrade': 'websocket', 'sec-websocket-protocol': Buffer.from(frame).toString('base64url') });
+      let status = 0, err = '';
+      try { const res = await SN.default.fetch(req, undefined, { waitUntil() {} }); status = res.status; } catch (e) { err = e.message; }
+      check(`snippets ws 入口 "%3F+非法编码 ${b}"：正常建连 101 不崩溃`, !err && status === 101, err ? 'THROW ' + err : 'status=' + status);
+    }
+    // snippets xhF 入口（成功=200）
+    for (const b of QBAD) {
+      connectLog = []; __pairs.length = 0;
+      const frame = vlessFrame(SN_UUID, 'sn-q2.org', 443, new Uint8Array([7]));
+      const { req, close } = mkXhReq('https://w.test/' + b, frame, okFetcher);
+      let status = 0, err = '';
+      try { const res = await SN.default.fetch(req, undefined, { waitUntil() {} }); status = res.status; } catch (e) { err = e.message; }
+      check(`snippets xhF 入口 "%3F+非法编码 ${b}"：正常放行 200 不崩溃`, !err && status === 200, err ? 'THROW ' + err : 'status=' + status);
+      close();
+    }
+  }
+
+  // ---------- 7.7 snippets 体积硬边界（Cloudflare Snippets 32KB 上限） ----------
+  {
+    const bytes = readFileSync(DIR + 'snippets.js').length;
+    check('snippets.js 体积 ≤ 32768 字节（Snippets 硬限额）', bytes <= 32768, bytes + ' bytes');
+  }
+
+  globalThis.fetch = realFetch;
+}
+
+// ================= 8. XH_HS 首包就绪边界（域长越界回归） =================
+console.log('\n===== XH_HS 首包就绪边界 =====');
+{
+  // 域名帧布局：o=19+optLen(0)=19；cmd@o-1、atype@o+2、domainLen@o+3、域名@o+4..o+3+l
+  const host = 'example.com';
+  const l = host.length, o = 19;
+  const fr = vlessFrame(WK.CFG.id, host, 443, new Uint8Array(0));
+  const hs = (cut) => WK.XH_HS(fr.subarray(0, cut));
+  check('worker XH_HS 域帧切片=o+3 → 1（等待更多，不得 -1）', hs(o + 3) === 1, 'got ' + hs(o + 3));
+  check('worker XH_HS 域帧切片=o+3+l → 1', hs(o + 3 + l) === 1, 'got ' + hs(o + 3 + l));
+  check('worker XH_HS 域帧切片=o+4+l → 0', hs(o + 4 + l) === 0, 'got ' + hs(o + 4 + l));
+
+  let SNX = null;
+  try { SNX = await loadSnippetsXH(); } catch (e) { SNX = null; }
+  if (SNX && typeof SNX.XH_HS === 'function') {
+    const sn = (cut) => SNX.XH_HS(fr.subarray(0, cut));
+    check('snippets XH_HS 域帧切片=o+3 → 1（等待更多，不得 -1）', sn(o + 3) === 1, 'got ' + sn(o + 3));
+    check('snippets XH_HS 域帧切片=o+3+l → 1', sn(o + 3 + l) === 1, 'got ' + sn(o + 3 + l));
+    check('snippets XH_HS 域帧切片=o+4+l → 0', sn(o + 4 + l) === 0, 'got ' + sn(o + 4 + l));
+  } else {
+    check('snippets XH_HS 边界用例（混淆产物无命名导出时跳过）', true, 'skipped');
+  }
 }
 
 // ================= 汇总 =================

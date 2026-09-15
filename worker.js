@@ -1118,6 +1118,9 @@ async function connectViaTurnProxy(openSocket, cfg, targetHost, targetPort, fami
 function pCfg(url, path, fbPIP = null) {
   let pIP = null, s5 = null, enS = null, turn = null, gP = null, order = null;
 
+  // 0. 路径百分号解码（EDT 对齐：先 decodeURIComponent；非法百分号编码安全降级，不抛 500）
+  try { path = decodeURIComponent(path); } catch (e) { /* 保留原值 */ }
+
   // 1a. TURN/TURNS：:// 为全局代理，= 为直连失败后回落
   const turnRoute = parseTurnProxyConfig('/' + path);
   if (turnRoute) {
@@ -1150,10 +1153,15 @@ function pCfg(url, path, fbPIP = null) {
     if (su) return { pIP, s5, enS, turn, gP: { type: "sstp", cfg: { host: su.hostname, port: parseInt(su.port) || 443, user: su.username ? decodeURIComponent(su.username) : "vpn", password: su.password ? decodeURIComponent(su.password) : "vpn" } }, order: ["gP"] };
   }
 
-  // 1c. /proxyip= → 强制 direct, proxy
-  const pxRe = /^proxyip=(.+)/i;
-  if (pxRe.test(path)) {
-    const seg = path.match(pxRe)[1];
+  // 1c. 路径任意位置的 proxyip= / proxyip. / proxyip/ / pyip= / ip=（EDT 对齐：不锚定、解码、去尾随斜杠）
+  //     命中即强制 order=['direct','proxy'] 并提前返回（保持原 1c 语义）
+  const pxRe = /(?:^|\/)(proxyip[=.\/]|pyip=|ip[=.\/])([^?#\s]+)/i;
+  const pxMatch = path.match(pxRe);
+  if (pxMatch) {
+    let seg = pxMatch[2];
+    const slash = seg.indexOf('/');
+    if (slash > 0) seg = seg.slice(0, slash);
+    seg = seg.replace(/\/+$/, '').trim();
     const [a, p = 443] = parseAddressPort(seg);
     pIP = { address: a.includes('[') ? a.slice(1, -1) : a, port: +p };
     order = ['direct', 'proxy'];
@@ -1180,12 +1188,7 @@ function pCfg(url, path, fbPIP = null) {
     return { pIP, s5, enS, turn, gP, order };
   }
 
-  // 路径任意位置的 /ip= /proxyip=
-  const ipMatch = path.match(/(?:^|\/)(?:proxy)?ip[=\/]([^?#]+)/i);
-  if (ipMatch) {
-    const [a, p = 443] = parseAddressPort(ipMatch[1]);
-    pIP = { address: a.includes('[') ? a.slice(1, -1) : a, port: +p };
-  }
+  // 路径任意位置的 /ip= /proxyip= 已统一至 1c（避免两套逻辑互相覆盖）
 
   // 路径任意位置的 /s5= /socks5= /http= /https=（EDT：g 前缀=全局，此处按回落处理）
   const localMatch = path.match(/(?:^|\/)(socks?5?|s5|https?)[=\/]([^/#?]+)/i);
@@ -1505,12 +1508,14 @@ const ws = async (req, env) => {
   // URL 编码修复（%3F 被转义进 path 的场景）
   const url = new URL(req.url);
   if (url.pathname.includes('%3F')) {
-    const decoded = decodeURIComponent(url.pathname);
-    const queryIndex = decoded.indexOf('?');
-    if (queryIndex !== -1) {
-      url.search = decoded.substring(queryIndex);
-      url.pathname = decoded.substring(0, queryIndex);
-    }
+    try {
+      const decoded = decodeURIComponent(url.pathname);
+      const queryIndex = decoded.indexOf('?');
+      if (queryIndex !== -1) {
+        url.search = decoded.substring(queryIndex);
+        url.pathname = decoded.substring(0, queryIndex);
+      }
+    } catch (e) { /* 非法百分号编码：保留原值，安全降级（与 pCfg 一致，不抛 500） */ }
   }
   const path = url.pathname.slice(1);
 
@@ -1960,8 +1965,10 @@ async function replyStats(env, chatId) {
 // =============================================================================
 // 🟢 主入口 (防1101保护)
 // =============================================================================// ===== xHTTP/gRPC 入站（POST 流式；借鉴 EDT 叉HTTP，VLESS-only） =====
-const XH_HD={'Content-Type':'application/octet-stream','grpc-status':'0','X-Accel-Buffering':'no','Cache-Control':'no-store','Connection':'keep-alive'},
-XH_HS=b=>{const n=b.length;if(n<19)return 1;const o=19+b[17];if(n<o+3)return 1;const t=b[o+2],l=1===t?4:2===t?b[o+3]:3===t?16:0;return l&&n>=o+3+l?0:l?1:-1},
+// 响应头对齐 EDT 处理叉HTTP请求（609-614/621-625）：逐跳头 Connection 不得出现在 H2/H3 响应（RFC 9113 §8.2.2）；grpc-status 属 gRPC 路径（EDT 991-996），xHTTP 保留无害
+const XH_HD={'Content-Type':'application/octet-stream','grpc-status':'0','X-Accel-Buffering':'no','Cache-Control':'no-store'},
+// 首包就绪判定：对齐 EDT 读取叉HTTP首包（823-861）——校验 cmd∈{1,2}；domain 需 addrType+len+域名字节齐备（原 n>=o+3+l 少 1 字节，会误判就绪后 400）
+XH_HS=b=>{const n=b.length;if(n<19)return 1;const o=19+b[17];if(n<o+3)return 1;const c=b[o-1];if(1!==c&&2!==c)return-1;const t=b[o+2];if(1===t)return n>=o+7?0:1;if(3===t)return n>=o+19?0:1;if(2===t){if(n<o+4)return 1;const l=b[o+3];return l?n>=o+4+l?0:1:-1}return-1},
 XH_R=t=>{try{t&&t.close&&t.close()}catch{}},
 XH_TS=()=>typeof IdentityTransformStream<"u"?new IdentityTransformStream():new TransformStream();
 const XH_HF=[13, 23, 28, 28, 28, 28, 28, 28, 28, 24, 30, 28, 28, 30, 28, 28,28, 28, 28, 28, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 28,6, 10, 10, 12, 13, 6, 8, 11, 10, 10, 8, 11, 8, 6, 6, 6,5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 8, 15, 6, 12, 10,13, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 8, 13, 19, 13, 14, 6,15, 5, 6, 5, 6, 5, 6, 6, 6, 5, 7, 7, 6, 6, 6, 5,6, 7, 6, 5, 5, 6, 7, 7, 7, 7, 7, 15, 11, 14, 13, 28,20, 22, 20, 20, 22, 22, 22, 23, 22, 23, 23, 23, 23, 23, 24, 23,24, 24, 22, 23, 24, 23, 23, 23, 23, 21, 22, 23, 22, 23, 23, 24,22, 21, 20, 22, 22, 23, 23, 21, 23, 22, 22, 24, 21, 22, 23, 23,21, 21, 22, 21, 23, 22, 23, 23, 20, 22, 22, 22, 23, 22, 22, 23,26, 26, 20, 19, 22, 23, 22, 25, 26, 26, 26, 27, 27, 26, 24, 25,19, 21, 26, 27, 27, 26, 27, 24, 21, 21, 26, 26, 28, 27, 27, 27,20, 24, 20, 21, 22, 21, 21, 23, 22, 22, 25, 25, 24, 24, 26, 23,26, 27, 26, 26, 27, 27, 27, 27, 27, 28, 27, 27, 27, 27, 27, 26,30];
@@ -1980,17 +1987,17 @@ catch{try{rd.cancel()}catch{}return new Response(null,{status:400})}
 if(buf[18+buf[17]]===2)return new Response("UDP is not supported",{status:400});
 let rm=null,rc=null,dead=!1,hn=null;
 const drop=()=>{if(!dead){dead=!0;XH_R(rm);try{rd.cancel()}catch{}}};
-const url=new URL(req.url);if(url.pathname.includes("%3F")){const d2=decodeURIComponent(url.pathname),q2=d2.indexOf("?");-1!==q2&&(url.search=d2.substring(q2),url.pathname=d2.substring(0,q2))}
+const url=new URL(req.url);if(url.pathname.includes("%3F")){try{const d2=decodeURIComponent(url.pathname),q2=d2.indexOf("?");-1!==q2&&(url.search=d2.substring(q2),url.pathname=d2.substring(0,q2))}catch{}}
 try{let fbPIP=fbPip||DEFAULT_PROXY_IP;if(fbPIP)fbPIP=String(fbPIP).replace(/^https?:\/\//i,"").replace(/\/+$/,"");
 rc=pCfg(url,url.pathname.slice(1),fbPIP);hn=addr(ss.addrType,ss.targetAddrBytes);
 if(!rc.gP&&XH_ST(hn))return new Response(XH_CAT(new Uint8Array([buf[0],0]),new TextEncoder().encode("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")),{status:200,headers:XH_HD});
 rm=await tryCon(req.fetcher,ss.addrType,hn,ss.port,rc);const w2=rm.writable.getWriter();if(ss.dataOffset<buf.length)await w2.write(buf.subarray(ss.dataOffset));w2.releaseLock()}catch(e2){drop();return new Response("xhERR:"+((e2&&e2.message)||"unknown"),{status:502})}
-const hh=new Headers(XH_HD);try{const pu=new URL("https://x.invalid/");pu.searchParams.set(XH_PDK,XH_pdGen(100+Math.floor(Math.random()*901)));hh.set(XH_PDH,pu.toString())}catch{}
+let hh;try{hh=new Headers(XH_HD)}catch{hh=new Headers()}try{const pu=new URL("https://x.invalid/");pu.searchParams.set(XH_PDK,XH_pdGen(100+Math.floor(Math.random()*901)));hh.set(XH_PDH,pu.toString())}catch{}
 req.signal&&req.signal.addEventListener&&req.signal.addEventListener("abort",drop);
-new ReadableStream({start(c){c.enqueue(new Uint8Array([buf[0],0]))}}).pipeTo(ts.writable,{preventClose:!0}).catch(()=>{});
+const pre=new ReadableStream({start(c){c.enqueue(new Uint8Array([buf[0],0]));c.close()}}).pipeTo(ts.writable,{preventClose:!0}).catch(()=>{});
 const ub=XH_UP(rm);
 (async()=>{try{for(;;){if(dead)break;const{done,value}=await rd.read();if(done)break;dead||ub.put(value)}}catch{}dead=!0;ub.end()})();
-rm.readable.pipeTo(ts.writable).then(drop,drop);
+pre.then(()=>{rm.readable.pipeTo(ts.writable).catch(()=>{drop()})});
 return new Response(ts.readable,{status:200,headers:hh})}
 
 
