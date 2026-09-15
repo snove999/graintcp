@@ -49,10 +49,10 @@
 
 | 部署目标 | 应部署文件 | 大小（冻结基线实测） | 说明 |
 |---|---|---|---|
-| Workers | **`worker.obf.js`** | 818121B（≈790KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
-| Workers（排障临时） | `worker.js` | ~332KB | 明文版，便于看堆栈；需改 `main` 才能部署 |
+| Workers | **`worker.obf.js`** | 818121B（≈799KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
+| Workers（排障临时） | `worker.js` | 341334B | 明文版，便于看堆栈；需改 `main` 才能部署 |
 | Snippets | **`snippets.js`**（明文） | 30433B（≈29.7KB） | ✅ **唯一可部署版本**（≤ 32768B） |
-| Snippets | `snippets.obf.js` | 39965B（≈39.3KB） | ❌ **不是部署件**：超 32768B 硬限额，仅作混淆参考 |
+| Snippets | `snippets.obf.js` | 39965B（≈39.0KB） | ❌ **不是部署件**：超 32768B 硬限额，仅作混淆参考 |
 
 > 🔴 **一句话记住产物对应关系**：**Workers 用 `worker.obf.js`；Snippets 必须贴明文 `snippets.js`**。
 > `snippets.obf.js`（39965B > 32768B）**在任何情况下都不是部署件** —— 混淆变换的最小膨胀约 +5KB，
@@ -202,7 +202,7 @@ wrangler deployments list  # 记下本次 Version ID，回滚要用
 ```
 
 **判定标准**：
-- `wrangler deploy` 输出 `Uploaded <name>` + `Deployed <name> triggers`，且打印的 **Upload 体积 ≈ 809KB**（若只有 300 多 KB，说明部署的是明文版，`main` 被改过）；
+- `wrangler deploy` 输出 `Uploaded <name>` + `Deployed <name> triggers`，且打印的 **Upload 体积 ≈ 818KB**（若只有 300 多 KB，说明部署的是明文版，`main` 被改过）；
 - `wrangler deployments list` 首行是刚刚的 Version ID，时间戳为当前时间。
 
 ### 2.2 路径 B：Dashboard（新手友好，无本地工具链）
@@ -262,7 +262,7 @@ D1 `config` 表（面板「保存配置」写入，键名与环境变量同名�
 | 计划 | **付费计划**（Free 无 Snippets 功能） | Dashboard 能看到 Rules → Snippets 入口 |
 | 体积 | **≤ 32768 字节（硬限额）** | `wc -c snippets.js` → 冻结基线实测 30433 字节（≈29.7KB）✅ |
 | CPU | 5ms/请求 | 轻量形态，勿加面板类重逻辑 |
-| 混淆版 | `snippets.obf.js` 冻结基线实测 39965 字节（≈39.3KB） | ❌ **不是部署件**：超限，仅作混淆参考（`_obfuscate.mjs` 注释亦标明"混淆参考版"） |
+| 混淆版 | `snippets.obf.js` 冻结基线实测 39965 字节（≈39.0KB） | ❌ **不是部署件**：超限，仅作混淆参考（`_obfuscate.mjs` 注释亦标明"混淆参考版"） |
 
 ```bash
 wc -c C:/Users/snove/.zcode/workspace/default/cf/snippets.js      # 必须 ≤ 32768
@@ -445,7 +445,7 @@ echo '--- body ---'; cat /tmp/xh_body.txt; echo
 | `HTTP=400` + body **为空** | ✅ **xHTTP 入口活着**：padding 校验通过、已进入握手解析，只是随机体不是合法帧 | 入口健康，进 L2.2 |
 | `HTTP=400` + body=`Bad Request` | ❌ **padding 校验失败**：请求带了 padding 头但 Huffman 长度不在 98–1002 字节 | 见 §7 分支 D |
 | `HTTP=502` + body 以 `xhERR:` 开头 | ⚠️ 握手**成功**、**出口建连失败**（`xhERR:` 后是具体错误） | 见 §7 分支 B/C |
-| `HTTP=500`（Cloudflare 错误页 / 空 500） | ❌ **入口内部抛异常**（**本轮线上实测未观测到 500**，属"万一见到"的形态）。**必须先按 URL 形状分两类**（§7 分支 F）：含 `%3F`+非法转义 ⇒ URL 解码类；普通 path 下仍 500 ⇒ 才怀疑 `const hh = new Headers(XH_HD)` 这行**未被 try 包裹** | 见 §7 分支 F（F1/F2 判据）。⚠️ 其中 `Connection` 头假设**已被实测否定**（L6.1），不要再去验证它 |
+| `HTTP=500`（Cloudflare 错误页 / 空 500） | ❌ **入口内部抛异常**（**本轮线上实测未观测到 500**，属"万一见到"的形态）。**必须先按 URL 形状分两类**（§7 分支 F）：含 `%3F`+非法转义 ⇒ **F1，已确证且已修复**；普通 path 下仍 500 ⇒ 原怀疑的 `new Headers(XH_HD)` **已被实测否定**，转查 `XH_TS()` / `XH_HS` / `req.fetcher.connect()` | 见 §7 分支 F（F1/F2 判据） |
 | `HTTP=200` + `Content-Type: application/octet-stream` | 命中测速站拦截，或随机体恰好构成合法握手（概率极低） | 进 L2.2 用确定帧重测 |
 | `HTTP=404` / `405` | ❌ 根本没进 xHTTP 分支 | 查：① `Content-Type` 是否 `application/octet-stream`（`application/grpc` 亦可）；② 是否 `POST`；③ Snippet/Worker 是否真绑到这个 hostname |
 | 无响应 / 超时 | 边缘或运行时挂了 | `wrangler tail`（Workers）/ Snippets 日志 |
@@ -861,7 +861,11 @@ cd C:/Users/snove/.zcode/workspace/default/cf
 wrangler deploy
 ```
 
-**判定**：`wrangler deploy` 的 Upload 体积与备份产物体积一致（±1KB 内）；L0–L2 复测通过。
+**判定**：`wrangler deploy` 的 Upload 体积与备份产物**同一量级**（≈800KB 量级，**不要要求逐字节一致** ——
+混淆器带随机性，见 §1.1.1 的说明）；随后按 **L0 → L2 → L8** 复测通过。
+
+> ⚠️ **回滚也要验行为，不能只看体积**：体积对不上不代表回滚失败（混淆产物不可复现），
+> 但**行为必须对上** —— 跑 `node test_harness.mjs`（151 项 0 失败）与 **L8** 验收协议。
 
 **方式三：临时切明文版定位（不是回滚，是排障）**
 
@@ -967,31 +971,34 @@ Snippets 无版本历史，**只能靠备份文本**：
 │   ⚠️ 不要把它当成"xHTTP 修复失败"来排查——它和本次改动无关。
 │
 └─ F【xHTTP 入口 500（运行时报错）】
-    ⚠️ **本分支是排查用假设，不是已确认事实**：本轮线上实测中，两端 xHTTP 入口返回的是
-       **400 / 200，未观测到 500**。保留本分支仅用于"万一见到 500"时的定位方向。
     特征：L2.1 返回 **500**（而非 400/502）；`wrangler tail` 里能看到抛出的异常堆栈；
           客户端表现是"完全不通"——连 `[0,0]` 都拿不到。
     区分点：★与 A 的区别是 **A 能拿到 [0,0]**，F 连数据流都建立不起来；
            ★与 C 的区别是 **C 是 502 + `xhERR:` 明文**（出口建连失败，已被 try 捕获），
              **F 是 500**（异常逃逸到运行时，说明出错点在 try 覆盖范围之外）。
     ★★ 关键第一步：**500 必须与请求 URL 形状关联，有两类互不相干的 500** ——
-       F1【URL 解码类】URL 含 `%3F` + 非法转义（如 `/x%3F%zz`）⇒ 命中 `%3F` 预解码路径
-          （`worker.js:1511` / `1986` 附近，该处 decodeURIComponent **未包 try**；行号与判定据
-           quality-security-expert-2 的 Task #3）⇒ 500。
+       F1【URL 解码类】✅ **已确证且已在冻结基线中修复**
+          URL 含 `%3F` + 非法转义（如 `/x%3F%zz`）⇒ 命中 `%3F` 预解码路径
+          （`worker.js:1511` / `1986` 附近，该处 decodeURIComponent **未包 try**）⇒ 500。
+          **证据**：红基线里 **12 项**失败全部属此类 —— worker/snippets × ws/xhF 入口 × 3 种非法编码
+          （`%`、`%zz`、`%E0%A4%A`），期望"正常放行不崩溃"但旧代码抛错。
+          修复后这 12 项转绿（`node test_harness.mjs` → 151 项 0 失败）。
           判据：**把 URL 换成不含 `%3F` 的普通 path（如 `/xh`）重测；若 500 消失 ⇒ 属 F1。**
-       F2【响应头类】普通 path 下仍 500 ⇒ 才轮到怀疑 `new Headers(XH_HD)`。
-    为什么桩测抓不到：离线 harness 跑在 **Node/undici** 上，**未建模 workerd 边缘的行为**
+       F2【响应头类】❌ **假设已被实测否定**（见下方）
+          普通 path 下仍 500 ⇒ 原本怀疑 `new Headers(XH_HD)`；但线上探针已证明
+          `Connection: keep-alive` / `grpc-status: 0` 被**原样回传**（L6.1）⇒ **不是这个原因**。
+    为什么桩测抓不到（当时的判断）：离线 harness 跑在 **Node/undici** 上，**未建模 workerd 边缘的行为**
               （尤其是头处理与 URL 预解码的执行环境差异）—— 这是"全绿但仍不通"的典型来源。
               ⚠️ 这是"桩测建模不全"的**现象描述**，**不等于**已证明任何具体机制。
     判别动作：
-      · [curl 可判定] L2.1 用**普通 path**（`/xh`）→ 500 ⇒ 锁定 F2；
-      · [curl 可判定] 同参数换 `%3F` 形状 URL → 500 ⇒ 锁定 F1（与头无关）；
-      · [需真实环境] `wrangler tail {WORKER_NAME}` 看堆栈，用行号区分 F1 / F2。
+      · [curl 可判定] L2.1 用**普通 path**（`/xh`）→ 500 ⇒ 排除 F1，转查其他抛错点；
+      · [curl 可判定] 同参数换 `%3F` 形状 URL → 500 ⇒ 命中 F1（**若在冻结基线上出现，说明修复未部署成功**）；
+      · [需真实环境] `wrangler tail {WORKER_NAME}` 看堆栈，用行号定位。
     止损：回滚（§6）；改法由 fullstack-engineer 定稿。
-    ⚠️ **F2 的 `Connection` 头假设已被实测否定，不要再去验证它**：
-       线上探针显示 `Connection: keep-alive` 与 `grpc-status: 0` 被**原样回传**（见 L6.1）
-       ⇒ workerd **不会**拒绝该头。若真遇到 F2 形态的 500，应转查 `XH_TS()` / `XH_HS` /
-       `req.fetcher.connect()` 那条线，而不是删响应头。
+    ⚠️ **不要再去验证 `Connection` 头**：实测已否定该假设。若真遇到普通 path 下的 500，
+       应转查 `XH_TS()` / `XH_HS` / `req.fetcher.connect()` 那条线。
+    ⚠️ **本轮线上实测未观测到 500**（实测为 400/200）——F1 是在**离线红基线**上确证的，
+       本分支保留用于"万一见到 500"时的定位方向。
 ```
 
 **速查：一句话区分六类**
@@ -1003,7 +1010,7 @@ Snippets 无版本历史，**只能靠备份文本**：
 | 拿不到数据流；响应体 `xhERR:`；502 | **C 直连腿超时** |
 | 400 + body 恰好是 `Bad Request` | **D padding 不匹配** |
 | TCP 全好、仅 UDP 400 | **E 设计行为** |
-| **500**；连 `[0,0]` 都没有；tail 有 xhF 内异常堆栈 | **F 入口运行时抛错（桩测盲区）** |
+| **500**；连 `[0,0]` 都没有；tail 有 xhF 内异常堆栈 | **F 入口运行时抛错**（F1 已确证并已修复；线上实测未观测到 500） |
 
 ---
 
@@ -1013,7 +1020,7 @@ Snippets 无版本历史，**只能靠备份文本**：
 |---|---|---|
 | 备份就绪 | `sha256sum -c docs/backup/<STAMP>/SHA256SUMS.txt` | 全部 OK |
 | 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `9ab1e855a293`/`a1731f2f3dba`/`862b69e37b40` |
-| 部署的是修复版 | `wrangler deploy` 输出的 Upload 体积 | ≈809KB（混淆版） |
+| 部署的是修复版 | `wrangler deploy` 输出的 Upload 体积 | ≈818KB（≈818121B，混淆版；明文版只有 300 多 KB） |
 | 混淆与源码同源 | 把产物复制成 `worker.js`/`snippets.js` 放临时目录后跑同一套 harness | **151 项里只有「`snippets.obf.js` 体积 > 32768」这 1 项红**（**其余无豁免项**） |
 | 断言未被静默跳过 | 产物保留顶层名（`renameGlobals:false` + terser `toplevel:false`），故 `export { XH_HS }` 追加有效 | `XH_HS 域帧切片` 6 条在产物里**真跑且全绿**（`o+3→1`、`o+3+l→1`、`o+4+l→0`，两端各 3 条），**不是 skipped** |
 | 红绿对照 | 对 `HEAD` 旧代码跑同一套回归 | **35/151 失败**（证明测试确实能测出缺陷） |
