@@ -147,7 +147,7 @@ const extractUuid = (line) => (line.match(/UUID="([^"]+)"/) || [0, SNIP_UUID_FAL
 
 async function loadWorker() {
   const src = readFileSync(DIR + 'worker.js', 'utf8');
-  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\n';
+  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_GUP, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\nexport const __b7={go2s5List:typeof _go2s5List=="function"?_go2s5List:null,go2s5Hit:typeof _go2s5Hit=="function"?_go2s5Hit:null,extHostSafe:typeof _extHostSafe=="function"?_extHostSafe:null,tryCon:typeof tryCon=="function"?tryCon:null,resetGO2S5:()=>{try{_GO2S5=null}catch(e){}},parseHosts:typeof _parseHosts=="function"?_parseHosts:null,fyShuffle:typeof _fyShuffle=="function"?_fyShuffle:null,XH_GUP:typeof XH_GUP=="function"?XH_GUP:null,GMAX:typeof GMAX=="number"?GMAX:null};\nexport const __b6={obs:typeof obs=="function"?obs:null,obsRedact:typeof obsRedact=="function"?obsRedact:null,obsScrub:typeof obsScrub=="function"?obsScrub:null,routeEnum:typeof routeEnum=="function"?routeEnum:null,obsReset:typeof _obsReset=="function"?_obsReset:null,tgStreak:typeof tgStreak=="function"?tgStreak:null,tgDegradedUntil:typeof tgDegradedUntil=="function"?tgDegradedUntil:null,tgFailBump:typeof tgFailBump=="function"?tgFailBump:null,tgFailClear:typeof tgFailClear=="function"?tgFailClear:null,sendTgMsg:typeof sendTgMsg=="function"?sendTgMsg:null,pushDashboard:typeof pushDashboard=="function"?pushDashboard:null};\n';
   writeFileSync(DIR + '_worker_test.mjs', patched);
   return import(pathToFileURL(DIR + '_worker_test.mjs').href);}
 
@@ -1060,7 +1060,7 @@ console.log('\n===== XH_HS 首包就绪边界 =====');
 //       只覆盖 grpF 的回退分支（XH_GCHK=false → xhF）；本组补齐 gRPC 正路径与帧编解码边界。
 console.log('\n===== gRPC 编解码 =====');
 {
-  const { XH_GCHK, XH_GFR, XH_GDEC, XH_isGrpc } = WK;
+  const { XH_GCHK, XH_GFR, XH_GDEC, XH_GUP, XH_isGrpc } = WK;
   const eqU8 = (a, b) => !!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]);
   const catU8 = parts => { let n = 0; for (const p of parts) n += p.length; const o = new Uint8Array(n); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o; };
   // 手写帧（独立于被测 GFR）：0x00 + BE32(n) + [0x0a + varint(len) + payload]
@@ -1082,10 +1082,32 @@ console.log('\n===== gRPC 编解码 =====');
   check('gRPC GCHK b[0]≠0（压缩标志非 0）→ false', XH_GCHK(mkGFrame(P8, { flag: 1 })) === false);
   check('gRPC GCHK n=0 → false', XH_GCHK(ghdr(0)) === false);
   check('gRPC GCHK n>0x1000000（超上限）→ false', XH_GCHK(ghdr(0x1000001)) === false);
-  check('gRPC GCHK n=0x1000000（上限）→ true', XH_GCHK(ghdr(0x1000000)) === true);
   check('gRPC GCHK 完整帧 b[5]≠0x0a → false', XH_GCHK(mkGFrame(P8, { tag: 0x12 })) === false);
-  check('gRPC GCHK 不完整帧（仅 5B 头，长度合法）→ true', XH_GCHK(mkGFrame(P8).subarray(0, 5)) === true);
   check('gRPC GCHK 空/过短 → false', XH_GCHK(new Uint8Array(0)) === false && XH_GCHK(null) === false);
+
+  // ---- L-1（确定性缺陷）：不完整帧不得跳过 b[5] 二次确认 ----
+  // 修前：`if(b.length>=5+n&&b[5]!==10)` 被前缀短路，5 字节头（b[5] 不存在）一律放行 → true
+  check('L-1 gRPC GCHK 仅 5B 头 [0,0,0,0,1] → false（修前 true）',
+    XH_GCHK(Uint8Array.from([0, 0, 0, 0, 1])) === false);
+  check('L-1 gRPC GCHK 6B 头 [0,0,0,0,1,0x0a] → true',
+    XH_GCHK(Uint8Array.from([0, 0, 0, 0, 1, 0x0a])) === true);
+  check('L-1 gRPC GCHK 6B 头 [0,0,0,0,1,0x00] → false（b[5]≠0x0a）',
+    XH_GCHK(Uint8Array.from([0, 0, 0, 0, 1, 0x00])) === false);
+  check('L-1 gRPC GCHK 声明 n=100 只给 20B 且 b[5]≠0x0a → false', (() => {
+    const b = new Uint8Array(20); b[0] = 0; b[4] = 100; b[5] = 0x12;
+    return XH_GCHK(b) === false;
+  })());
+
+  // ---- L-2（加固）：帧长上限 16MiB → 4MiB（GMAX）----
+  const GMAX = 0x400000;
+  const g6 = (n, tag = 0x0a) => Uint8Array.from([0, (n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255, tag]);
+  check('L-2 gRPC GCHK n=GMAX(0x400000) → true', XH_GCHK(g6(GMAX)) === true);
+  check('L-2 gRPC GCHK n=GMAX+1 → false（旧上限 0x1000000 亦被拒）',
+    XH_GCHK(g6(GMAX + 1)) === false && XH_GCHK(g6(0x1000000)) === false);
+  check('L-2 gRPC GDEC 声明 n>GMAX 的畸形帧 → 不解出、全量保留 leftover', (() => {
+    const b = new Uint8Array(64); b[1] = 0x00; b[2] = 0x40; b[3] = 0x00; b[4] = 0x01; // n=0x400001
+    const d = XH_GDEC(b); return d.out.length === 0 && d.rest.length === 64;
+  })());
 
   // ---- codec：XH_GFR 封帧格式 ----
   const fr8 = XH_GFR(P8);
@@ -1193,7 +1215,797 @@ console.log('\n===== gRPC 编解码 =====');
   check('gRPC 判定：CT=application/grpc + padding URL 参数 → false', XH_isGrpc(mkR('application/grpc', 'https://w.test/x?' + PDK + '=zzz')) === false);
   check('gRPC 判定：CT=application/octet-stream → false', XH_isGrpc(mkR('application/octet-stream')) === false);
   check('gRPC 判定：无 CT（packet-up）→ false', XH_isGrpc(mkR(null)) === false);
+  // ---- L-3（确定性缺陷）：application/grpc-web* 不得被 startsWith 前缀命中 ----
+  check('L-3 gRPC 判定：CT=application/grpc-web → false（修前 true）', XH_isGrpc(mkR('application/grpc-web')) === false);
+  check('L-3 gRPC 判定：CT=application/grpc-web+proto → false', XH_isGrpc(mkR('application/grpc-web+proto')) === false);
+  check('L-3 gRPC 判定：CT=application/grpc-web-text+proto → false', XH_isGrpc(mkR('application/grpc-web-text+proto')) === false);
+  check('L-3 gRPC 判定：CT=application/grpc; charset=utf-8 → true（带参仍兼容）', XH_isGrpc(mkR('application/grpc; charset=utf-8')) === true);
+
+  // ---- L-2c（加固）：XH_GUP 惰性拉取，不提前抽干整个请求体 ----
+  check('L-2c gRPC XH_GUP 惰性拉取：只取 1 帧时不抽干后续数据', await (async () => {
+    let fed = 0; const TOTAL = 400;
+    const rd = { read: async () => (fed < TOTAL ? (fed++, { done: false, value: XH_GFR(P8) }) : { done: true }) };
+    const r = XH_GUP(null, rd, false).getReader();
+    // 关键：先静置，给"预读型"实现足够时间抽干；惰性实现在此之前不应读取
+    await sleep(60);
+    const fedIdle = fed;
+    const first = await r.read();
+    const fedAfterOne = fed;
+    await r.cancel().catch(() => { });
+    return !!first.value && fedIdle <= 2 && fedAfterOne <= 8 && fedAfterOne < TOTAL / 4;
+  })());
+  // ---- L-2b（加固）：声明长度越界的帧立即终止，不再无界缓冲 ----
+  check('L-2b gRPC XH_GUP 声明 n>GMAX 的帧 → 立即报错终止、不缓冲', await (async () => {
+    let fed = 0;
+    const rd = { read: async () => (fed < 100000 ? (fed++, { done: false, value: new Uint8Array(1024) }) : { done: true }) };
+    const r = XH_GUP(Uint8Array.from([0, 0, 0x40, 0, 1]), rd, false).getReader(); // n=0x400001 > GMAX
+    let err = null, out = 0;
+    try { for (;;) { const { done, value } = await r.read(); if (done) break; out += value.length; } } catch (e) { err = e; }
+    return !!err && out === 0 && fed <= 4;   // 首个分块内即判定，不再继续喂入
+  })());
   if (typeof WK.__setPD === 'function') WK.__setPD('', '');
+}
+
+// ================= 10. 面板鉴权加固（R1-a / R1-b / 残留 #3 #4 #5） =================
+console.log('\n===== 面板鉴权加固 =====');
+{
+  const UA2 = 'Mozilla/5.0 (R2 Test)';
+  const PWD = 'abc';                       // worker.js 顶部默认 WEB_PASSWORD
+  const ctx2 = { waitUntil(p) { try { Promise.resolve(p).catch(() => { }); } catch { } } };
+  const mkR2 = ({ url, method = 'GET', headers = {}, body = null }) => {
+    const h = {}; for (const [k, v] of Object.entries(headers)) h[k.toLowerCase()] = v;
+    return {
+      url, method,
+      headers: { get: k => (k.toLowerCase() in h ? h[k.toLowerCase()] : null) },
+      cf: { country: 'US', city: 'T' },
+      body,
+      json: async () => { try { return JSON.parse(body); } catch { return null; } },
+      text: async () => (typeof body === 'string' ? body : ''),
+      fetcher: { connect() { throw new Error('no-connect'); } }
+    };
+  };
+  const call = (req, env) => WK.default.fetch(req, env || {}, ctx2);
+  // D1 桩：store 持久化；failWrite=true 模拟写库失败（R1-a 场景）
+  // 注意：_cfgLoad 用的是 prepare(...).all()（无 bind），_dashWrite 用的是 prepare(...).bind(k,v,v).run()
+  const mkDB = (failWrite = false) => {
+    const store = new Map();
+    return {
+      store,
+      prepare(sql) {
+        const ins = /INSERT/i.test(sql);
+        const all = async () => ({ results: ins ? [] : [...store].map(([k2, v2]) => ({ key: k2, value: v2 })) });
+        const run = (a) => { if (failWrite) throw new Error('D1 write failed'); if (ins && a && a.length >= 2) store.set(String(a[0]), String(a[1])); return Promise.resolve({}); };
+        const bound = (a) => ({ bind: (...a2) => bound(a2), all, run: () => run(a) });
+        return { bind: (...a) => bound(a), all, run: () => run([]) };
+      }
+    };
+  };
+  const resetCfg = () => { try { if (typeof WK.cfgCacheReset === 'function') WK.cfgCacheReset(); } catch { } };
+  const login = (env, ip, pwd = PWD) => call(mkR2({
+    url: 'https://w.test/?flag=login', method: 'POST',
+    headers: { 'User-Agent': UA2, 'Content-Type': 'application/json', ...(ip ? { 'cf-connecting-ip': ip } : {}) },
+    body: JSON.stringify({ pwd })
+  }), env);
+  const cookieOf = res => (res.headers.get('set-cookie') || '').split(';')[0] || '';
+  const isDash = async (env, ck) => {
+    const res = await call(mkR2({ url: 'https://w.test/', headers: { 'User-Agent': UA2, Cookie: ck } }), env);
+    const t = await res.text();
+    return res.status === 200 && t.includes('mainBody');
+  };
+
+  // ---- R1-a / E5：_dashWrite 失败时不得返回「未持久化的随机值」（否则每请求轮换、登录后立即掉线）----
+  // E5 裁定：此前「回退 _WEB_PW」与 R1-b 的 fail-closed 不一致（密钥可能仍是源码公开默认口令）→ 改为返回 '' 由登录端点 503。
+  // 因此本组断言由「回退后仍可登录」改为「fail-closed：拒绝登录、不签发 cookie」。
+  resetCfg();
+  {
+    const env = { DB: mkDB(true) };                       // 有 D1 但写入失败
+    const r1 = await login(env, '10.1.1.1');
+    check('R1-a/E5 写库失败：登录被拒（503，fail-closed，不再回退口令当 HMAC 密钥）',
+      r1.status === 503, 'status=' + r1.status);
+    check('R1-a/E5 写库失败：不签发任何 cookie（无未持久化随机密钥可签发）',
+      cookieOf(r1) === '', 'set-cookie=' + (r1.headers.get('set-cookie') || '(无)'));
+    // 关键鉴别：连续两次登录均被拒 —— 证明不会「第一次 200、第二次因密钥轮换而掉线」的静默故障
+    const r2 = await login(env, '10.1.1.1');
+    check('R1-a/E5 写库失败：连续两次登录均被拒（不存在密钥轮换导致的静默掉线）',
+      r2.status === 503 && cookieOf(r2) === '', 'status=' + r2.status);
+  }
+
+  // ---- R1-b：无 D1 且未配（强）AUTH_SECRET → 拒绝面板登录、不签发 cookie ----
+  resetCfg();
+  {
+    const env = {};                                        // 无 D1、无 AUTH_SECRET
+    const r = await login(env, '10.2.2.2');
+    check('R1-b 无 D1 无 AUTH_SECRET：登录被拒（503）', r.status === 503, 'status=' + r.status);
+    check('R1-b 无 D1 无 AUTH_SECRET：不签发任何 cookie', cookieOf(r) === '', 'set-cookie=' + (r.headers.get('set-cookie') || '(无)'));
+  }
+
+  // ---- 残留 #3：AUTH_SECRET 强度下限（<16 视为弱并忽略）----
+  resetCfg();
+  {
+    const r = await login({ AUTH_SECRET: '1' }, '10.3.3.3');   // 弱密钥 + 无 D1 → 无安全密钥可用
+    check('残留#3 AUTH_SECRET="1"（弱）+ 无 D1 → 不被采用，登录被拒',
+      r.status === 503 && cookieOf(r) === '', 'status=' + r.status);
+  }
+  resetCfg();
+  {
+    const env = { AUTH_SECRET: '1', DB: mkDB(false) };         // 弱密钥被忽略 → 走 D1 自动随机
+    const r = await login(env, '10.4.4.4');
+    const ck = cookieOf(r);
+    check('残留#3 弱 AUTH_SECRET 被忽略后改用自动随机并持久化 → 登录成功',
+      r.status === 200 && ck.startsWith('auth='), 'status=' + r.status);
+    check('残留#3 自动随机密钥签发的 cookie 可校验通过', ck ? await isDash(env, ck) : false);
+  }
+
+  // ---- 残留 #4：登录退避表 TTL / 容量 / unknown 桶 ----
+  const LF = (globalThis.__loginFail ||= new Map());
+  resetCfg();
+  {
+    LF.clear();
+    const env = { DB: mkDB(false) };
+    let last = 0;
+    for (let i = 0; i < 6; i++) last = (await login(env, '10.5.5.5', 'wrong-pw')).status;
+    check('残留#4 真实 IP 连续 6 次失败 → 触发退避 429', last === 429, 'last=' + last);
+  }
+  resetCfg();
+  {
+    LF.clear();
+    const env = { DB: mkDB(false) };
+    let saw429 = false, last = 0;
+    for (let i = 0; i < 8; i++) { last = (await login(env, null, 'wrong-pw')).status; if (last === 429) saw429 = true; }
+    check("残留#4 'unknown' 桶（无 cf-connecting-ip）不参与退避 → 始终 403 不误伤", !saw429 && last === 403, 'last=' + last + ' saw429=' + saw429);
+  }
+  resetCfg();
+  {
+    LF.clear();
+    const now = Date.now();
+    for (let i = 0; i < 10001; i++) LF.set('10.6.' + (i >> 8) + '.' + (i & 255), { c: 5, t: now, until: now + 60000 });
+    const before = LF.size;
+    await login({ DB: mkDB(false) }, '10.7.7.7', 'wrong-pw');
+    check('残留#4 退避表容量上限生效（预置 10001 条活跃项 → 单次请求后回落）',
+      before > 10000 && LF.size < 100, 'before=' + before + ' after=' + LF.size);
+    LF.clear();
+  }
+
+  // ---- 残留 #5：无 D1 时 webhook 告警不得被匿名放大 ----
+  {
+    const saveFetch = globalThis.fetch;
+    let tg = 0;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url instanceof URL ? url : (url && url.url) || url);
+      if (u.includes('api.telegram.org')) { tg++; return new RealResponse(JSON.stringify({ ok: true, result: {} }), { status: 200, headers: { 'content-type': 'application/json' } }); }
+      if (/dns-query|\/resolve/.test(u) && /[?&]name=/.test(u)) return new RealResponse(JSON.stringify({ Answer: [] }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+      return new RealResponse('', { status: 200 });
+    };
+    try {
+      const wh = () => call(mkR2({
+        url: 'https://w.test/tg/webhook', method: 'POST',
+        headers: { 'User-Agent': UA2, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: { text: 'hello', chat: { id: 1 } } })
+      }), { TG_BOT_TOKEN: 'tok', TG_CHAT_ID: '1' });
+      globalThis.__whWarned = 0; tg = 0;
+      resetCfg();
+      await wh(); await wh(); await sleep(120);
+      check('残留#5 无 D1：webhook 调 2 次只告警 1 次（isolate 内存标志）', tg === 1, 'tg=' + tg);
+
+      globalThis.__whWarned = 0; tg = 0;
+      resetCfg();
+      const envDB = { TG_BOT_TOKEN: 'tok', TG_CHAT_ID: '1', DB: mkDB(false) };
+      await call(mkR2({ url: 'https://w.test/tg/webhook', method: 'POST', headers: { 'User-Agent': UA2, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { text: 'hi', chat: { id: 1 } } }) }), envDB);
+      await call(mkR2({ url: 'https://w.test/tg/webhook', method: 'POST', headers: { 'User-Agent': UA2, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { text: 'hi', chat: { id: 1 } } }) }), envDB);
+      await sleep(120);
+      check('残留#5 有 D1：webhook 调 2 次仍只告警 1 次（持久化路径未回归）', tg === 1, 'tg=' + tg);
+    } finally { globalThis.fetch = saveFetch; }
+  }
+}
+
+// ================= 11. 批次 7 EDT 对齐（A-1 / A-3 / A-4 / A-5 / A-6 / A-7 / A-11） =================
+console.log('\n===== 批次 7 EDT 对齐 =====');
+{
+  const UA3 = 'Mozilla/5.0 (B7 Test)';
+  const UA_TUNNEL = 'v2rayN/ed' + 'tunnel (https://github.com/cm' + 'liu/ed' + 'tunnel)';
+  const UUID0 = '06b65903-406d-4a41-8463-6fd5c0ee7798';   // worker.js 顶部默认 UUID
+  const MAGIC_Q = '/sub?host=example.com&uuid=00000000-0000-4000-8000-000000000000';
+  const ctx3 = { waitUntil(p) { try { Promise.resolve(p).catch(() => { }); } catch { } } };
+  const mkR3 = ({ url, method = 'GET', headers = {}, body = null }) => {
+    const h = {}; for (const [k2, v2] of Object.entries(headers)) h[k2.toLowerCase()] = v2;
+    return {
+      url, method,
+      headers: { get: k => (k.toLowerCase() in h ? h[k.toLowerCase()] : null) },
+      cf: { country: 'US', city: 'T' }, body,
+      json: async () => { try { return JSON.parse(body); } catch { return null; } },
+      text: async () => (typeof body === 'string' ? body : ''),
+      fetcher: { connect() { throw new Error('no-connect'); } }
+    };
+  };
+  const call3 = (req, env) => WK.default.fetch(req, env || {}, ctx3);
+  const resetCfg3 = () => { try { if (typeof WK.cfgCacheReset === 'function') WK.cfgCacheReset(); } catch { } };
+  // 注意：不能用 decodeURIComponent(escape(atob(x)))——escape 会把字面 '%' 变成 '%25'，导致 %2C 解不开
+  const unb64 = (t) => { try { return decodeURIComponent(atob(t)); } catch (e) { try { return atob(t); } catch (e2) { return ''; } } };
+
+  // ---- A-1：BEST_SUB 订阅生成器哨兵（默认关闭）----
+  resetCfg3();
+  check('A-1 未配 BEST_SUB：魔术参数仍 403（默认关闭，零回归面）',
+    (await call3(mkR3({ url: 'https://w.test' + MAGIC_Q, headers: { 'User-Agent': UA_TUNNEL } }), {})).status === 403);
+  // E2：BEST_SUB 改为**强随机令牌**屏障 —— 三个魔术参数全是源码字面量（本项目开源、可枚举），
+  //     SUB_DOMAIN 也只是普通面板配置项（普遍会填），都不足以保护「跳过 UUID 校验 = 泄露真实 UUID/ProxyIP」这一路径。
+  const BST = 'x'.repeat(40);                       // ≥32 字符强令牌
+  const BENV = { BEST_SUB: '1', SUB_DOMAIN: 'gen.test', BEST_SUB_TOKEN: BST };
+  resetCfg3();
+  {
+    const r = await call3(mkR3({ url: 'https://w.test' + MAGIC_Q + '&bst=' + BST, headers: { 'User-Agent': UA_TUNNEL } }), BENV);
+    const t = await r.text();
+    check('A-1/E2 BEST_SUB=1 + 强令牌 + ?bst= 正确 + 3/3 魔术条件 → 200 且返回订阅',
+      r.status === 200 && unb64(t).includes('vless://'), 'status=' + r.status);
+  }
+  resetCfg3();
+  check('A-1/E2 已配 SUB_DOMAIN + 全魔术命中但**未配 BEST_SUB_TOKEN** → 403（不跳过鉴权）',
+    (await call3(mkR3({ url: 'https://w.test' + MAGIC_Q + '&bst=' + BST, headers: { 'User-Agent': UA_TUNNEL } }), { BEST_SUB: '1', SUB_DOMAIN: 'gen.test' })).status === 403);
+  resetCfg3();
+  check('A-1/E2 已配令牌但请求未带 ?bst= → 403',
+    (await call3(mkR3({ url: 'https://w.test' + MAGIC_Q, headers: { 'User-Agent': UA_TUNNEL } }), BENV)).status === 403);
+  resetCfg3();
+  check('A-1/E2 带了错误令牌 → 403',
+    (await call3(mkR3({ url: 'https://w.test' + MAGIC_Q + '&bst=' + 'y'.repeat(40), headers: { 'User-Agent': UA_TUNNEL } }), BENV)).status === 403);
+  resetCfg3();
+  check('A-1/E2 令牌长度 <32 视为弱 → 忽略该配置 → 403',
+    (await call3(mkR3({ url: 'https://w.test' + MAGIC_Q + '&bst=short', headers: { 'User-Agent': UA_TUNNEL } }), { BEST_SUB: '1', SUB_DOMAIN: 'gen.test', BEST_SUB_TOKEN: 'short' })).status === 403);
+  resetCfg3();
+  check('A-1 BEST_SUB=1 但魔术条件只满足 2/3 → 403',
+    (await call3(mkR3({ url: 'https://w.test/sub?uuid=00000000-0000-4000-8000-000000000000&bst=' + BST, headers: { 'User-Agent': UA_TUNNEL } }), BENV)).status === 403);
+  // A-1 门槛（team-lead 裁定）：未显式配置 SUB_DOMAIN → 整个哨兵分支不启用，仍走 UUID 鉴权
+  resetCfg3();
+  {
+    const r = await call3(mkR3({ url: 'https://w.test' + MAGIC_Q + '&bst=' + BST, headers: { 'User-Agent': UA_TUNNEL } }), { BEST_SUB: '1', BEST_SUB_TOKEN: BST });
+    check('A-1 门槛：BEST_SUB=1 + 令牌正确但**未配 SUB_DOMAIN** → 仍 403（不跳过鉴权）', r.status === 403, 'status=' + r.status);
+  }
+
+  // ---- A-3：订阅域名随机化（默认关闭）----
+  const subOf = async (env) => {
+    const r = await call3(mkR3({ url: 'https://w.test/sub?uuid=' + UUID0, headers: { 'User-Agent': UA3 } }), env);
+    return unb64(await r.text());
+  };
+  const ADD2 = { ADD: '1.1.1.1:443#n1\n8.8.8.8:443#n2' };
+  resetCfg3();
+  check('A-3 未配 RANDOM_HOST：订阅域名保持入口域名（默认关闭零影响）', (await subOf(ADD2)).includes('w.test'));
+  resetCfg3();
+  {
+    const d = await subOf({ ...ADD2, RANDOM_HOST: '1', HOSTS: 'a.test,b.test' });
+    check('A-3 RANDOM_HOST=1 + HOSTS：出现 ≥2 种随机域名且原域名已被替换',
+      d.includes('a.test') && d.includes('b.test') && !d.includes('w.test'), d.slice(0, 120));
+  }
+  resetCfg3();
+  {
+    const d = await subOf({ ...ADD2, RANDOM_HOST: '1', HOSTS: 'evil.com/@x,b.test' });
+    check('A-3 HOSTS 白名单：含 / @ 的非法域名被过滤（防节点 URI 注入）', !d.includes('evil.com'), d.slice(0, 120));
+  }
+
+  // ---- A-4 / A-5：转换器回源钉 &target=mixed + 补 udp/xudp/tls13/append_type ----
+  const GEN_LINE = 'vless://00000000-0000-4000-8000-000000000000@1.2.3.4:443?encryption=none&security=tls&type=ws&host=example.com#n';
+  const captureSub = async (env, url) => {
+    const save = globalThis.fetch; const seen = [];
+    globalThis.fetch = async (u) => {
+      const s = String((u && u.url) || u);
+      seen.push(s);
+      if (s.includes('/sub?host=example.com')) return new RealResponse(btoa(GEN_LINE), { status: 200 });
+      return new RealResponse('converted', { status: 200 });
+    };
+    try { return { res: await call3(mkR3({ url, headers: { 'User-Agent': UA3 } }), env), seen }; }
+    finally { globalThis.fetch = save; }
+  };
+  resetCfg3();
+  {
+    const { seen } = await captureSub({ SUBAPI: 'https://conv.test' }, 'https://w.test/123456?target=clash');
+    const conv = seen.find(u => u.includes('conv.test')) || '';
+    const inner = decodeURIComponent((conv.match(/[?&]url=([^&]*)/) || [0, ''])[1]);
+    check('A-4 回源 URL 钉 &target=mixed（对齐 EDT 回源约定）', inner.includes('flag=true&target=mixed'), 'inner=' + inner);
+    check('A-5 转换器 URL 补 udp/xudp/tls13/append_type（默认全开）',
+      /&udp=true/.test(conv) && /&xudp=true/.test(conv) && /&tls13=true/.test(conv) && /&append_type=true/.test(conv), conv.slice(0, 220));
+  }
+  resetCfg3();
+  {
+    const { seen } = await captureSub({ SUBAPI: 'https://conv.test', SUB_UDP: 'false' }, 'https://w.test/123456?target=clash');
+    const conv = seen.find(u => u.includes('conv.test')) || '';
+    check('A-5 SUB_UDP=false → 转换器 URL 出现 udp=false（可配）', /&udp=false/.test(conv), conv.slice(0, 220));
+  }
+  resetCfg3();
+  {
+    const { res } = await captureSub({ SUBAPI: 'https://conv.test' }, 'https://w.test/123456?target=mixed');
+    const ct = res.headers.get('content-type') || '';
+    check('A-4 ?target=mixed → 钉为原生 base64 通用订阅（不进转换后端，无本端递归）',
+      ct.includes('text/plain') && unb64(await res.text()).includes('vless://'), 'ct=' + ct);
+  }
+
+  // ---- A-7：TLS 分片订阅参数 ----
+  resetCfg3();
+  check('A-7 TLS_FRAGMENT=shadowrocket → 节点含 fragment=1,40-60,30-50,tlshello',
+    (await subOf({ TLS_FRAGMENT: 'shadowrocket' })).includes('fragment=1,40-60,30-50,tlshello'));
+  resetCfg3();
+  check('A-7 TLS_FRAGMENT=happ → 节点含 fragment=3,1,tlshello',
+    (await subOf({ TLS_FRAGMENT: 'happ' })).includes('fragment=3,1,tlshello'));
+  resetCfg3();
+  check('A-7 未配 TLS_FRAGMENT → 不含 fragment（零影响）', !(await subOf({})).includes('fragment='));
+
+  // ---- A-11：/robots.txt、GET /logout、admin/check ----
+  resetCfg3();
+  {
+    const r = await call3(mkR3({ url: 'https://w.test/robots.txt', headers: { 'User-Agent': 'Googlebot/2.1' } }), {});
+    check('A-11 /robots.txt → 200 + Disallow: /（且位于蜘蛛拦截之前）', r.status === 200 && (await r.text()).includes('Disallow: /'), 'status=' + r.status);
+  }
+  resetCfg3();
+  {
+    const r = await call3(mkR3({ url: 'https://w.test/logout', headers: { 'User-Agent': UA3 } }), {});
+    const sc = r.headers.get('set-cookie') || '';
+    check('A-11 GET /logout → 302 + Location:/ + 清 cookie（无开放重定向）',
+      r.status === 302 && r.headers.get('location') === '/' && /Max-Age=0/i.test(sc), 'status=' + r.status + ' sc=' + sc);
+  }
+  const mkDB3 = () => {
+    const store = new Map();
+    return {
+      store, prepare(sql) {
+        const ins = /INSERT/i.test(sql);
+        const all = async () => ({ results: ins ? [] : [...store].map(([k2, v2]) => ({ key: k2, value: v2 })) });
+        const run = (a) => { if (ins && a && a.length >= 2) store.set(String(a[0]), String(a[1])); return Promise.resolve({}); };
+        const bound = (a) => ({ bind: (...a2) => bound(a2), all, run: () => run(a) });
+        return { bind: (...a) => bound(a), all, run: () => run([]) };
+      }
+    };
+  };
+  const DB3 = mkDB3(); const ENV3 = { DB: DB3 };
+  let AUTH_CK = '';
+  resetCfg3();
+  {
+    const r = await call3(mkR3({
+      url: 'https://w.test/?flag=login', method: 'POST',
+      headers: { 'User-Agent': UA3, 'Content-Type': 'application/json', 'cf-connecting-ip': '10.9.9.9' },
+      body: JSON.stringify({ pwd: 'abc' })
+    }), ENV3);
+    AUTH_CK = (r.headers.get('set-cookie') || '').split(';')[0];
+    check('A-11 前置：取得有效鉴权 cookie', AUTH_CK.startsWith('auth='), 'ck=' + AUTH_CK.slice(0, 16));
+  }
+  resetCfg3();
+  check('A-11 admin/check 无鉴权 → 403',
+    (await call3(mkR3({ url: 'https://w.test/admin/check?socks5=1.2.3.4:1080', headers: { 'User-Agent': UA3 } }), {})).status === 403);
+  resetCfg3();
+  check('A-11 admin/check 有鉴权但缺代理参数 → 400',
+    (await call3(mkR3({ url: 'https://w.test/admin/check', headers: { 'User-Agent': UA3, Cookie: AUTH_CK } }), ENV3)).status === 400);
+  resetCfg3();
+  {
+    const r = await call3(mkR3({ url: 'https://w.test/admin/check?socks5=127.0.0.1:1080', headers: { 'User-Agent': UA3, Cookie: AUTH_CK } }), ENV3);
+    const j = await r.json().catch(() => ({}));
+    check('A-11 admin/check 内网代理主机 → SSRF 闸门拦截（400 / success:false）',
+      r.status === 400 && j.success === false, 'status=' + r.status + ' body=' + JSON.stringify(j));
+  }
+
+  // ---- A-6：pCfg ?sstp= 与 g 前缀全局语法 ----
+  {
+    const c1 = pCfg(mkUrl('/s5=1.2.3.4:1080'), 's5=1.2.3.4:1080', null);
+    check('A-6 原有 /s5= 行为不变（仍为回落，非全局）', !c1.gP && !!c1.s5, JSON.stringify({ gP: !!c1.gP, s5: !!c1.s5 }));
+    const c2 = pCfg(mkUrl('/gs5=1.2.3.4:1080'), 'gs5=1.2.3.4:1080', null);
+    check('A-6 /gs5= → 提升为全局 socks5', !!c2.gP && c2.gP.type === 'socks5' && !c2.s5, JSON.stringify({ type: c2.gP && c2.gP.type }));
+    const c3 = pCfg(mkUrl('/gturn=user:pass@1.2.3.4:3478'), 'gturn=user:pass@1.2.3.4:3478', null);
+    check('A-6 /gturn= → 全局 turn', !!c3.gP && c3.gP.type === 'turn', JSON.stringify({ type: c3.gP && c3.gP.type }));
+    const c4 = pCfg(mkUrl('/?sstp=1.2.3.4:443'), 'x', null);
+    check('A-6 ?sstp= → 解析并提升为全局 sstp', !!c4.gP && c4.gP.type === 'sstp', JSON.stringify({ type: c4.gP && c4.gP.type }));
+    const c5 = pCfg(mkUrl('/ghttps=1.2.3.4:443'), 'ghttps=1.2.3.4:443', null);
+    // gP.type 只有 socks5/http/sstp/turn 四种（tryCon 按此分派），https 落在 'http' 且靠 cfg.tls=1 走 TLS 隧道
+    check('A-6 /ghttps= → 全局（type=http + cfg.tls=1）',
+      !!c5.gP && c5.gP.type === 'http' && c5.gP.cfg && c5.gP.cfg.tls === 1, JSON.stringify({ type: c5.gP && c5.gP.type, tls: c5.gP && c5.gP.cfg && c5.gP.cfg.tls }));
+  }
+
+  // ---- A-12：GO2SOCKS5 直连白名单（匹配方式 + SSRF 红线 + 未配零影响）----
+  {
+    const B7 = WK.__b7 || {};
+    // helper 缺失（如跑在陈旧产物上）时返回 null → 断言自然判红，而不是抛异常炸掉整个 harness
+    const HIT = (l, h) => { try { return B7.go2s5Hit ? B7.go2s5Hit(l, h) : null; } catch (e) { return null; } };
+    const LIST = async (env) => { try { B7.resetGO2S5 && B7.resetGO2S5(); return B7.go2s5List ? await B7.go2s5List(env) : null; } catch (e) { return null; } };
+    const RESET = () => { try { B7.resetGO2S5 && B7.resetGO2S5(); } catch (e) { } };
+    // 最小 socket 桩：opened 已 resolve（供 raceSprout/sprout 使用），其余空实现
+    const fakeFetcher = {
+      connect() {
+        return {
+          opened: Promise.resolve(),
+          writable: { getWriter: () => ({ write: async () => { }, releaseLock: () => { } }) },
+          readable: { getReader: () => ({ read: async () => ({ done: true, value: undefined }), releaseLock: () => { } }) },
+          close: () => { }
+        };
+      }
+    };
+    check('A-12 匹配：精确主机名 a.com → 命中', HIT(['a.com'], 'a.com') === true);
+    check('A-12 匹配：evil-a.com **不**命中 a.com（非子串包含）', HIT(['a.com'], 'evil-a.com') === false);
+    check('A-12 匹配：*b.com 命中 x.b.com（点分后缀）', HIT(['*b.com'], 'x.b.com') === true);
+    check('A-12 匹配：xb.com **不**命中 *b.com（必须带点）', HIT(['*b.com'], 'xb.com') === false);
+    check('A-12 匹配：*.c.com 写法同样支持', HIT(['*.c.com'], 'y.c.com') === true);
+    check('A-12 匹配：未配白名单（空列表）→ 恒 false', HIT([], 'a.com') === false);
+    RESET();
+    {
+      const l0 = await LIST({ GO2SOCKS5: '*' });
+      check('A-12 格式闸门：裸 "*" 被拒（不得整体关闭 ProxyIP 收敛）', Array.isArray(l0) && l0.length === 0, JSON.stringify(l0));
+    }
+    RESET();
+    {
+      const l = await LIST({ GO2SOCKS5: 'a.com, *.b.com, bad/x, ok.com' });
+      check('A-12 格式闸门：含 / 的非法项被丢弃，合法项保留',
+        Array.isArray(l) && l.length === 3 && l.includes('a.com') && l.includes('*.b.com') && l.includes('ok.com'), JSON.stringify(l));
+    }
+    RESET();
+    // tryCon 安全包装：helper 缺失（跑在陈旧产物上）时返回 err，断言自然判红而不炸 harness
+    const TRYCON = async (at, h, p, rc, env) => {
+      if (!B7.tryCon) return { sock: null, err: new Error('tryCon-unavailable') };
+      try { return { sock: await B7.tryCon(fakeFetcher, at, h, p, rc, env), err: null }; } catch (e) { return { sock: null, err: e }; }
+    };
+    // 命中白名单 → 直连（不抛错，拿到 socket）
+    RESET();
+    {
+      const rc = { pIP: { address: 'proxy.test', port: 443 }, s5: null, enS: null, turn: null, gP: null, order: ['proxy'] };
+      const { sock, err } = await TRYCON(3, 'direct.test', 443, rc, { GO2SOCKS5: 'direct.test' });
+      check('A-12 命中白名单 → 改为直连（跳过 ProxyIP）', !err && !!sock, 'err=' + (err && err.message));
+    }
+    RESET();
+    // ★ 硬红线：白名单不等于放行内网——命中也要过 _extHostSafe
+    {
+      const rc = { pIP: null, s5: null, enS: null, turn: null, gP: null, order: ['direct'] };
+      const { err } = await TRYCON(1, '127.0.0.1', 80, rc, { GO2SOCKS5: '127.0.0.1' });
+      check('A-12 红线：目标为回环地址，即便命中白名单也被 _extHostSafe 拒绝',
+        !!err && /GO2SOCKS5 target blocked/.test(String(err.message)), 'err=' + (err && err.message));
+    }
+    RESET();
+    {
+      const rc = { pIP: null, s5: null, enS: null, turn: null, gP: null, order: ['direct'] };
+      const { err } = await TRYCON(1, '10.0.0.5', 80, rc, { GO2SOCKS5: '10.0.0.5' });
+      check('A-12 红线：目标为内网地址（10.0.0.5）同样被拒',
+        !!err && /GO2SOCKS5 target blocked/.test(String(err.message)), 'err=' + (err && err.message));
+    }
+    RESET();
+  }
+
+  // ---- A-11：admin/check 失败路径必须返回明确错误（不挂起、不静默）----
+  {
+    // (a) fetcher 直接抛错 → 明确 error 字符串
+    resetCfg3();
+    {
+      const r = await call3(mkR3({ url: 'https://w.test/admin/check?socks5=proxy.test:1080', headers: { 'User-Agent': UA3, Cookie: AUTH_CK } }), ENV3);
+      const j = await r.json().catch(() => ({}));
+      check('A-11 失败路径：connect 抛错 → success:false + 非空 error（不挂起）',
+        j.success === false && typeof j.error === 'string' && j.error.length > 0 && typeof j.responseTime === 'number', JSON.stringify(j));
+    }
+    // (b) 代理握手成功但目标不可达（socket 立即 EOF）→ 明确「出网 80 端口不可达」错误
+    resetCfg3();
+    {
+      const scriptSock = (chunks) => {
+        let i = 0;
+        return {
+          writable: { getWriter: () => ({ write: async () => { }, releaseLock: () => { } }) },
+          readable: { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }), releaseLock: () => { } }) },
+          close: () => { }
+        };
+      };
+      const req2 = mkR3({ url: 'https://w.test/admin/check?socks5=proxy.test:1080', headers: { 'User-Agent': UA3, Cookie: AUTH_CK } });
+      // SOCKS5 握手两次响应都返回成功，随后 readable 立即 EOF（模拟目标 80 不通）
+      req2.fetcher = { connect: () => scriptSock([new Uint8Array([5, 0]), new Uint8Array([5, 0, 0, 1, 0, 0, 0, 0, 0, 0])]) };
+      const r = await call3(req2, ENV3);
+      const j = await r.json().catch(() => ({}));
+      check('A-11 失败路径：目标 80 不可达 → 明确「未取到 trace 响应」错误（非静默）',
+        j.success === false && /80|trace/.test(String(j.error || '')), JSON.stringify(j));
+    }
+    // (c) E3：异常路径必须关 socket —— 原实现的 releaseLock/close 在 try 主体末尾，
+    //     catch 只返回 JSON 不关连接 → 泄漏至 isolate 回收。改为 finally 后此处必须关闭。
+    resetCfg3();
+    {
+      let closed = false, i = 0;
+      // SOCKS5 握手两次响应给成功，握手完成（_ckSock 已赋值）后，**HTTP GET 写阶段**抛错
+      const hsChunks = [new Uint8Array([5, 0]), new Uint8Array([5, 0, 0, 1, 0, 0, 0, 0, 0, 0])];
+      const badSock = {
+        writable: {
+          getWriter: () => ({
+            write: async (v) => {
+              const s = new TextDecoder().decode(v || new Uint8Array(0));
+              if (s.startsWith('GET ')) throw new Error('boom');   // 只在真正发 HTTP 请求时炸
+            },
+            releaseLock: () => { }
+          })
+        },
+        readable: { getReader: () => ({ read: async () => (i < hsChunks.length ? { done: false, value: hsChunks[i++] } : { done: true, value: undefined }), releaseLock: () => { } }) },
+        close: () => { closed = true; }
+      };
+      const req3 = mkR3({ url: 'https://w.test/admin/check?socks5=proxy.test:1080', headers: { 'User-Agent': UA3, Cookie: AUTH_CK } });
+      req3.fetcher = { connect: () => badSock };
+      const r = await call3(req3, ENV3);
+      const j = await r.json().catch(() => ({}));
+      check('E3 admin/check 写阶段抛错 → 返回明确 error（不挂起）',
+        j.success === false && typeof j.error === 'string' && j.error.length > 0, JSON.stringify(j));
+      check('E3 admin/check 异常路径也关闭 socket（清理在 finally）', closed === true, 'closed=' + closed);
+    }
+  }
+}
+
+// ================= 12. 批次 6：可观测性（/health + TG 可见性 + 低频结构化日志） =================
+console.log('\n===== 批次 6 可观测性 =====');
+{
+  const WK6 = WK.__b6 || {};
+  // 过期产物（未含批次 6 代码）跑 harness 时 __b6 全为 null：降级为 1 条失败，避免整轮崩溃丢失红基线
+  const B6_OK = !!(WK6.obs && WK6.routeEnum && WK6.sendTgMsg && WK6.tgStreak);
+  const mkDB6 = () => {
+    const store = new Map();
+    return {
+      store, prepare(sql) {
+        const ins = /INSERT/i.test(sql);
+        const all = async () => ({ results: ins ? [] : [...store].map(([k2, v2]) => ({ key: k2, value: v2 })) });
+        const run = (a) => { if (ins && a && a.length >= 2) store.set(String(a[0]), String(a[1])); return Promise.resolve({}); };
+        const bound = (a) => ({ bind: (...a2) => bound(a2), all, run: () => run(a) });
+        return { bind: (...a) => bound(a), all, run: () => run([]) };
+      }
+    };
+  };
+  const mkR6 = (url, method = 'GET') => ({
+    url, method,
+    headers: { get: k => (k.toLowerCase() === 'user-agent' ? 'Mozilla/5.0 (B6 Test)' : null) },
+    cf: { country: 'US', city: 'T' }, body: null,
+    json: async () => ({}), text: async () => ''
+  });
+  const call6 = (req, env) => WK.default.fetch(req, env || {}, { waitUntil() { } });
+
+  // ---- ① /health：SLO 探针端点（最小信息、不泄漏） ----
+  {
+    const r = await call6(mkR6('https://w.test/health'), {});
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch (e) { }
+    check('批次6 /health：curl/蜘蛛类 UA 之外也能拿到 200（端点位于蜘蛛拦截之前）', r.status === 200, 'status=' + r.status);
+    check('批次6 /health：响应体最小信息（仅 {ok,t} 两个键）',
+      !!j && j.ok === true && typeof j.t === 'number' && Object.keys(j).length === 2, t);
+    check('批次6 /health：不泄漏 UUID / 口令 / token / 版本 / 主机名 / 部署形态',
+      !/d675a8ea|vless|cloudflare|D1|SUB_PASSWORD|password|token|version|worker|obf/i.test(t), t);
+  }
+
+  // ---- ② TG 推送可见性：失败计数 → 降级 → 恢复单条告警 ----
+  if (!B6_OK) {
+    check('批次6 TG 可见性：产物未含批次 6 代码（红基线 —— 需重建产物）', false, '__b6 导出缺失');
+  } else {
+    const prevFetch = globalThis.fetch;
+    const oErr = console.error, oWarn = console.warn;
+    const lines = [];
+    // 只劫持 error/warn（obs 的 error/warn 出口）；**不能劫持 log** —— check() 用它输出结论
+    const grab = (...a) => { lines.push(a.map(x => String(x)).join(' ')); };
+    console.error = grab; console.warn = grab;
+    let mode = 'ok';
+    globalThis.fetch = async (u, opt) => {
+      const s = String(u instanceof URL ? u : (u && u.url) || u);
+      if (!/api\.telegram\.org/.test(s)) return prevFetch(u, opt);
+      if (mode === 'fail500') return new RealResponse('err', { status: 500 });
+      if (mode === 'failapi') return new RealResponse(JSON.stringify({ ok: false, description: 'chat not found' }), { status: 200 });
+      if (mode === 'throw') throw new Error('net down');
+      return new RealResponse(JSON.stringify({ ok: true, result: { message_id: 777 } }), { status: 200 });
+    };
+    const pend = [];
+    const ctx6 = { waitUntil(p) { pend.push(Promise.resolve(p).catch(() => { })); } };
+    const drain = async () => { for (let i = 0; i < 10 && pend.length; i++) { const b = pend.splice(0); await Promise.all(b); await sleep(1); } };
+    const env6 = { DB: mkDB6(), TG_BOT_TOKEN: '123456:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIII', TG_CHAT_ID: '10001' };
+    const hasEv = (arr, ev) => arr.some(l => { try { return JSON.parse(l).ev === ev; } catch (e) { return false; } });
+    try {
+      if (WK6.obsReset) WK6.obsReset();
+      await WK6.tgFailClear(env6, 'init');   // 干净起点（清 D1 计数 + 内存计数）
+      lines.length = 0;
+      // (a) 连续 3 次失败（TG 业务错误：HTTP 200 + {"ok":false}）
+      mode = 'failapi';
+      const trace = [];
+      for (let i = 0; i < 3; i++) {
+        WK.cfgCacheReset();                       // 每轮前重置 D1 配置缓存（模拟独立 isolate，避免跨用例缓存串味）
+        await WK6.sendTgMsg(ctx6, env6, 'B6 测试', mkR6('https://w.test/abc'), '', false);
+        await drain();
+        trace.push(await WK6.tgStreak(env6));
+      }
+      const s3 = await WK6.tgStreak(env6);
+      const dg = await WK6.tgDegradedUntil(env6);
+      check('批次6 TG 可见性：连续 3 次失败 → streak=3（原实现完全静默）', s3 === 3, 'streak=' + s3 + ' trace=' + trace.join('>'));
+      check('批次6 TG 可见性：达阈值 → 进降级冷却（degraded_until > now）', dg > Date.now(), 'until=' + dg);
+      check('批次6 TG 可见性：失败落结构化日志 ev=tg_fail', hasEv(lines, 'tg_fail'), lines.slice(0, 1).join('') || '(no log)');
+      // (b) 降级冷却期内 pushDashboard 跳过（不硬试、不刷屏）
+      lines.length = 0;
+      await WK6.pushDashboard({ ...env6, STATS_ENABLED: 'true' });
+      check('批次6 TG 可见性：降级期内 pushDashboard 跳过 + 落 tg_dash_degraded', hasEv(lines, 'tg_dash_degraded'), lines.slice(-1)[0] || '(no log)');
+      // (c) 恢复：成功一次 → 计数清零 + 恢复通知（单条）
+      mode = 'ok';
+      lines.length = 0;
+      await WK6.sendTgMsg(ctx6, env6, 'B6 测试', mkR6('https://w.test/abc'), '', false);
+      await drain();
+      const s0 = await WK6.tgStreak(env6);
+      check('批次6 TG 可见性：成功一次 → streak 清零 + 落 tg_recovered（恢复单条告警）',
+        s0 === 0 && hasEv(lines, 'tg_recovered'), 'streak=' + s0 + ' lines=' + lines.length);
+      // (d) 无 D1 时退化为 isolate 内存计数，仍可观测（不刷屏）
+      lines.length = 0;
+      const envNoDB = { TG_BOT_TOKEN: '123456:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIII', TG_CHAT_ID: '10001' };
+      await WK6.tgFailClear(envNoDB, 'init');
+      mode = 'fail500';
+      await WK6.sendTgMsg(ctx6, envNoDB, 'B6 测试', mkR6('https://w.test/abc'), '', false);
+      await drain();
+      check('批次6 TG 可见性：无 D1 → 退化为内存计数仍可观测（streak=1）', (await WK6.tgStreak(envNoDB)) === 1, 'streak=' + (await WK6.tgStreak(envNoDB)));
+    } finally {
+      globalThis.fetch = prevFetch;
+      console.error = oErr; console.warn = oWarn;
+    }
+  }
+
+  // ---- ③ 低频结构化日志：格式 / 敏感字段过滤 / 路由枚举 / 节流 ----
+  if (!B6_OK) {
+    check('批次6 低频结构化日志：产物未含批次 6 代码（红基线 —— 需重建产物）', false, '__b6 导出缺失');
+  } else {
+    const oErr = console.error, oWarn = console.warn, oLog = console.log;
+    const lines = [];
+    const grab = (...a) => { lines.push(a.map(x => String(x)).join(' ')); };
+    try {
+      console.error = grab; console.warn = grab; console.log = grab;
+      if (WK6.obsReset) WK6.obsReset();
+      WK6.obs('error', 'b6_unit', {
+        route: 'admin_check', retry: 2,
+        password: 'p@ssw0rd', cookie: 'auth=abc', token: '123:AAAA', uuid: '06b65903-406d-4a41-8463-6fd5c0ee7798',
+        note: 'bot123456:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIII'
+      }, {});
+      console.error = oErr; console.warn = oWarn; console.log = oLog;
+      let j = null; try { j = JSON.parse(lines[0] || ''); } catch (e) { }
+      check('批次6 日志：单行 JSON（ts/lvl/ev/n 齐备，Workers Logs 可直接检索）',
+        lines.length === 1 && !!j && typeof j.ts === 'string' && j.lvl === 'error' && j.ev === 'b6_unit' && j.n === 1, lines[0] || '(no log)');
+      check('批次6 日志：password/cookie/token/uuid 键 → [redacted]（敏感字段过滤）',
+        !!j && j.password === '[redacted]' && j.cookie === '[redacted]' && j.token === '[redacted]' && j.uuid === '[redacted]', lines[0] || '');
+      check('批次6 日志：非敏感标量保留（route=admin_check / retry=2）',
+        !!j && j.route === 'admin_check' && j.retry === 2, lines[0] || '');
+      check('批次6 日志：串内 bot token 被 obsScrub 抹除',
+        !!j && typeof j.note === 'string' && j.note.indexOf('123456:AAAA') === -1 && /bot_token/.test(j.note), String(j && j.note));
+
+      const re = WK6.routeEnum;
+      check('批次6 路由枚举：/robots.txt /logout /admin/check /health 各自成枚举',
+        re('/robots.txt') === 'robots' && re('/logout') === 'logout' && re('/admin/check') === 'admin_check' && re('/health') === 'health',
+        [re('/robots.txt'), re('/logout'), re('/admin/check'), re('/health')].join(','));
+      check('批次6 路由枚举：`/{SUB_PASSWORD}` 明文口令路径归一为 path_pw_or_404（不落原始 pathname）',
+        re('/MySecretPw') === 'path_pw_or_404' && re('/a/b') === 'other' && re('/') === 'root',
+        re('/MySecretPw') + ' / ' + re('/a/b'));
+
+      // 节流：同事件 60s 内第二次不输出 → 错误也不刷屏
+      const l2 = [];
+      console.error = (...a) => l2.push(a.map(String).join(' '));
+      const a1 = WK6.obs('error', 'b6_throttle', {}, {});
+      const a2 = WK6.obs('error', 'b6_throttle', {}, {});
+      console.error = oErr;
+      check('批次6 日志：同事件 60s 内节流（第二次不输出，错误也不刷屏）',
+        a1 === true && a2 === false && l2.length === 1, 'a1=' + a1 + ' a2=' + a2 + ' lines=' + l2.length);
+
+      // D1 读失败 → 落 d1_read_fail（原先完全静默）
+      const badDB = {
+        prepare: () => ({
+          all: async () => { throw new Error('D1 down'); },
+          run: async () => { throw new Error('D1 down'); },
+          bind: () => ({ all: async () => { throw new Error('D1 down'); }, run: async () => { throw new Error('D1 down'); } })
+        })
+      };
+      const l3 = [];
+      WK.cfgCacheReset();
+      console.warn = (...a) => l3.push(a.map(String).join(' '));
+      const v = await WK.getSafeEnv({ DB: badDB }, 'ANY_KEY_NOT_SET', 'fallback');
+      console.warn = oWarn;
+      check('批次6 低频日志：D1 读失败 → 落 d1_read_fail（原先静默）',
+        v === 'fallback' && l3.some(l => { try { return JSON.parse(l).ev === 'd1_read_fail'; } catch (e) { return false; } }),
+        'v=' + v + ' lines=' + l3.length);
+
+      // 收敛验证：第二轮 R1-b 的散落 console.error 已改为统一 obs（拒绝登录路径）
+      const l4 = [];
+      if (WK6.obsReset) WK6.obsReset();
+      console.warn = (...a) => l4.push(a.map(String).join(' '));
+      const r503 = await call6({
+        url: 'https://w.test/?flag=login', method: 'POST',
+        headers: { get: k => (k.toLowerCase() === 'user-agent' ? 'Mozilla/5.0 (B6 Test)' : null) },
+        cf: { country: 'US', city: 'T' }, body: '{"pwd":"abc"}',
+        json: async () => ({ pwd: 'abc' }), text: async () => '{"pwd":"abc"}'
+      }, {});
+      console.warn = oWarn;
+      check('批次6 收敛：R1-b 拒绝登录路径落统一日志 auth_no_secret（替代原 console.error）',
+        r503.status === 503 && l4.some(l => { try { return JSON.parse(l).ev === 'auth_no_secret'; } catch (e) { return false; } }),
+        'status=' + r503.status + ' lines=' + l4.length);
+      const src6 = readFileSync(DIR + 'worker.js', 'utf8');
+      check('批次6 收敛：源码已无 `[auth]` 散落 console.error（统一走 obs）',
+        !/console\.error\('\[auth\]/.test(src6), 'left=' + (src6.match(/console\.error\('\[auth\]/g) || []).length);
+    } finally {
+      console.error = oErr; console.warn = oWarn; console.log = oLog;
+    }
+  }
+}
+
+// ================= 13. 第六轮：审查 6 条确定性错误（E1~E6）+ 4 条优化 =================
+console.log('\n===== 第六轮 审查整改（E1~E6 + 优化）=====');
+{
+  const B7 = WK.__b7 || {};
+  const B6 = WK.__b6 || {};
+
+  // ---- E1：XH_GUP 残留缓冲改为摊还 O(n) ----
+  // 场景（审查 E1）：声明 n=GMAX(=4MiB，上界含等号 → 判为合法) 却永不补齐该帧
+  //   → XH_GDEC 恒无产出 → parseVP/UUID 校验从未执行 → pull 仍持续缓冲。旧实现 p=XH_CAT(p,v) 每次全量重分配。
+  if (B7.XH_GUP && typeof B7.GMAX === 'number') {
+    const G = B7.GMAX;
+    const hd = new Uint8Array([0x00, (G >>> 24) & 0xff, (G >>> 16) & 0xff, (G >>> 8) & 0xff, G & 0xff, 0x0a]);
+    const runK = async (K) => {
+      let fed = 0;
+      const rd = { read: async () => (fed < K ? (fed++, { done: false, value: new Uint8Array([0x41]) }) : { done: true }) };
+      const t0 = Date.now();
+      const rr = B7.XH_GUP(hd, rd, false).getReader();
+      try { for (; ;) { const x = await rr.read(); if (x.done) break; } } catch (e) { }
+      return Date.now() - t0;
+    };
+    await runK(2000);                                   // warmup（消除 JIT 噪声）
+    const m1 = await runK(5000), m2 = await runK(20000);
+    const mul = m2 / Math.max(m1, 1);
+    // 线性护栏：K 增 4 倍耗时不得超 15 倍。旧实现同场景实测 8.33x(5k→2e4)，且总拷贝 O(K×|p|)。
+    check('E1 XH_GUP 摊还缓冲：K 5k→2e4 耗时增长 <15x（O(n²) 护栏）',
+      mul < 15, `5k=${m1}ms 2e4=${m2}ms 倍数=${mul.toFixed(2)}x`);
+    check('E1 XH_GUP：声明 n=GMAX 永不补齐仍在 2s 内终止（不卡死、有上界）', m2 < 2000, `2e4=${m2}ms`);
+  } else {
+    check('E1 XH_GUP 摊还缓冲（过期产物无导出 → 降级失败，保留红基线）', false, 'XH_GUP/GMAX 未导出');
+  }
+
+  // ---- E4：cfgCacheReset 一并失效 _GO2S5（否则面板改 GO2SOCKS5 要等 isolate 回收）----
+  if (B7.go2s5List) {
+    B7.resetGO2S5();
+    const l1 = await B7.go2s5List({ GO2SOCKS5: 'a.com' });
+    const l2 = await B7.go2s5List({ GO2SOCKS5: 'b.com' });   // 未 reset → 命中缓存，仍 a.com
+    WK.cfgCacheReset();
+    const l3 = await B7.go2s5List({ GO2SOCKS5: 'b.com' });   // reset 后 → 重新解析为 b.com
+    check('E4 前置：未 reset 时返回缓存值（证明缓存确实存在）',
+      l1.includes('a.com') && JSON.stringify(l1) === JSON.stringify(l2), JSON.stringify({ l1, l2 }));
+    check('E4 cfgCacheReset 一并清 _GO2S5（面板改配置立即生效）',
+      l3.includes('b.com') && !l3.includes('a.com'), JSON.stringify({ l1, l2, l3 }));
+    B7.resetGO2S5();
+  } else {
+    check('E4 cfgCacheReset 清 _GO2S5（过期产物无导出 → 降级失败）', false, 'go2s5List 未导出');
+  }
+
+  // ---- E6：日志脱敏黑名单补齐 err|error|msg|message|host|hostname|url|target|proxy|key ----
+  if (B6.obsRedact) {
+    const o = B6.obsRedact({ host: 'h', hostname: 'hn', url: 'u', error: 'e', msg: 'm', message: 'mm', target: 't', proxy: 'p', key: 'k', foo: 'bar' });
+    check('E6 脱敏黑名单补齐（host/hostname/url/error/msg/message/target/proxy/key 全部 [redacted]，无关键不受影响）',
+      ['host', 'hostname', 'url', 'error', 'msg', 'message', 'target', 'proxy', 'key'].every(k => o[k] === '[redacted]') && o.foo === 'bar',
+      JSON.stringify(o));
+  } else {
+    check('E6 脱敏黑名单补齐（过期产物无导出 → 降级失败）', false, 'obsRedact 未导出');
+  }
+
+  // ---- 优化2：Fisher-Yates 均匀洗牌（原 sort(()=>Math.random()-0.5) 分布不均）----
+  if (B7.fyShuffle) {
+    const cnt = [0, 0, 0], cntOld = [0, 0, 0];
+    for (let i = 0; i < 6000; i++) {
+      cnt[B7.fyShuffle([0, 1, 2])[0]]++;
+      cntOld[[0, 1, 2].sort(() => Math.random() - 0.5)[0]]++;
+    }
+    check('优化2 Fisher-Yates：3 元素首位分布均匀（6000 次各 ~2000，容差 ±250）',
+      cnt.every(c => c >= 1750 && c <= 2250), '新=' + JSON.stringify(cnt) + ' 旧sort=' + JSON.stringify(cntOld));
+  } else {
+    check('优化2 Fisher-Yates 洗牌（过期产物无导出 → 降级失败）', false, 'fyShuffle 未导出');
+  }
+
+  // ---- 优化3：OBS_ENABLED 一并支持 D1 配置（env 未设时读 _cfgCache）----
+  if (B6.obs) {
+    const store = new Map([['OBS_ENABLED', 'false']]);
+    const dbEnv = {
+      DB: {
+        prepare: () => ({
+          all: async () => ({ results: [...store].map(([k, v]) => ({ key: k, value: v })) }),
+          bind: () => ({ run: async () => ({}), all: async () => ({ results: [] }) })
+        })
+      }
+    };
+    WK.cfgCacheReset();
+    await WK.getSafeEnv(dbEnv, '__opt3_probe__', 'x');      // 触发 _cfgLoad 填充 D1 缓存
+    const emitted = B6.obs('info', 'opt3_probe_should_be_off', {}, dbEnv);
+    check('优化3 OBS_ENABLED 支持 D1 配置（env 未设、D1 为 false → 不输出）', emitted === false, 'obs返回=' + emitted);
+    WK.cfgCacheReset();
+  } else {
+    check('优化3 OBS_ENABLED 支持 D1（过期产物无导出 → 降级失败）', false, 'obs 未导出');
+  }
+
+  // ---- 优化4：HOSTS 拒绝无点项与裸 "*"（对齐 GO2SOCKS5 口径，避免"配错即断网"）----
+  if (B7.parseHosts) {
+    const l = B7.parseHosts('a.com, nodot, *, *.b.com, ok.com');
+    check('优化4 _parseHosts 拒绝无点项与裸 *（合法项保留）',
+      !l.includes('nodot') && !l.includes('*') && l.includes('a.com') && l.includes('*.b.com') && l.includes('ok.com'),
+      JSON.stringify(l));
+  } else {
+    check('优化4 _parseHosts 拒绝无点项与裸 *（过期产物无导出 → 降级失败）', false, 'parseHosts 未导出');
+  }
 }
 
 // ================= 汇总 =================

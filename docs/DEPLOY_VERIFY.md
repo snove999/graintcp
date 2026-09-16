@@ -1,13 +1,13 @@
 # GrainTCP 部署 · 线上验证 · 回滚手册
 
 <!-- doccheck:baseline
-harness_total=180
-file.worker.js.bytes=361753
-file.worker.js.sha256_12=a9aed13aeddb
+harness_total=275
+file.worker.js.bytes=390620
+file.worker.js.sha256_12=4434611cfa3b
 file.snippets.js.bytes=31463
 file.snippets.js.sha256_12=312c664da700
-file.worker.obf.js.bytes=861905
-file.worker.obf.js.sha256_12=572d32b515fd
+file.worker.obf.js.bytes=914491
+file.worker.obf.js.sha256_12=6a06adca7279
 -->
 
 > 适用版本：本次 xHTTP 下行断流（P0）、`/proxyip=` 路径解析（P1）、gRPC 帧编解码（P1-9）与 `XH_GDEC` O(n²) DoS 加固（G.2）修复后
@@ -59,8 +59,8 @@ file.worker.obf.js.sha256_12=572d32b515fd
 
 | 部署目标 | 应部署文件 | 大小（冻结基线实测） | 说明 |
 |---|---|---|---|
-| Workers | **`worker.obf.js`** | 861905B（≈842KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
-| Workers（排障临时） | `worker.js` | 361753B | 明文版，便于看堆栈；需改 `main` 才能部署 |
+| Workers | **`worker.obf.js`** | 914491B（≈893KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
+| Workers（排障临时） | `worker.js` | 390620B | 明文版，便于看堆栈；需改 `main` 才能部署 |
 | Snippets | **`snippets.js`**（明文） | 31463B（≈30.7KB） | ✅ **唯一可部署版本**（≤ 32768B） |
 
 > 🔴 **一句话记住产物对应关系**：**Workers 用 `worker.obf.js`；Snippets 必须贴明文 `snippets.js`**。
@@ -78,10 +78,10 @@ file.worker.obf.js.sha256_12=572d32b515fd
 
 | 文件 | sha256（前 12 位） | 大小 |
 |---|---|---|
-| `worker.js`（明文，Workers 源） | `a9aed13aeddb…` | — |
+| `worker.js`（明文，Workers 源） | `4434611cfa3b…` | — |
 | `snippets.js`（明文，**Snippets 部署件**） | `312c664da700…` | 31463B |
-| `worker.obf.js`（**Workers 部署件**） | `572d32b515fd…` | 861905B |
-| `test_harness.mjs` | — | **180 项** |
+| `worker.obf.js`（**Workers 部署件**） | `6a06adca7279…` | 914491B |
+| `test_harness.mjs` | — | **275 项** |
 
 ```bash
 cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
@@ -89,7 +89,7 @@ sha256sum worker.js snippets.js worker.obf.js | cut -c1-12
 ```
 
 **判定标准**：明文两项前缀对上 `cef32273a828` / `93153be9504d`（确认"源码没被改过"）。
-`worker.obf.js` 的前缀 `572d32b515fd` **仅标识"仓库里提交的这一份"**，重建后会变 —— 见下方警告。
+`worker.obf.js` 的前缀 `6a06adca7279` **仅标识"仓库里提交的这一份"**，重建后会变 —— 见下方警告。
 
 > ⚠️ **哈希的正确用法（务必分清，否则会误判）**
 > - **明文 `worker.js` / `snippets.js` 的哈希是权威且稳定的** —— 用来确认"这份源码没被改过"。
@@ -103,7 +103,7 @@ sha256sum worker.js snippets.js worker.obf.js | cut -c1-12
 >   cp snippets.js   .obfcheck/snippets.js        # 明文部署件 → 必须复制，否则 harness 9 处 import 会崩
 >   ( cd .obfcheck && node test_harness.mjs | tail -n 3 ); rm -rf .obfcheck
 >   ```
->   **期望：180 项全绿、0 失败**（`snippets.obf.js` 已删除，不再有「体积 > 32768」这条预期红；
+>   **期望：275 项全绿、0 失败**（`snippets.obf.js` 已删除，不再有「体积 > 32768」这条预期红；
 >   门禁白名单为空、**0 容忍**，任何红一律 `exit≠0`）。
 >   这才能证明"混淆产物与明文行为等价"。**每次重新构建后都要重跑。**
 
@@ -141,12 +141,12 @@ node _obfuscate.mjs
 **判定标准**：脚本输出一行体积对比，`worker.obf.js` 生成成功且**体积在 300KB~1.5MB 区间**（明显偏离说明混淆配置被改坏）。随后**必须**跑一次回归：
 
 ```bash
-node test_harness.mjs      # 期望：180 项、0 失败
+node test_harness.mjs      # 期望：275 项、0 失败
 
 # --- 红绿对照：证明这套用例不是"空洞全绿" ---
 # 关键：test_harness.mjs 的 DIR = 它自己所在目录，所以把 harness 与旧文件
 #       一起放进临时目录即可，**完全不必改动工作区里的任何源码**。
-# ⚠️ 修复前的提交 1496ffb 早于 gRPC 功能（P1-9）；当前 180 项 harness 的导出清单
+# ⚠️ 修复前的提交 1496ffb 早于 gRPC 功能（P1-9）；当前 275 项 harness 的导出清单
 #    硬依赖 gRPC 符号（XH_GCHK/XH_GFR/XH_GDEC/XH_isGrpc/XH_pdFeat），1496ffb 无这些
 #    符号 → 在其上跑当前 harness 会在**导入阶段 SyntaxError**、无法产出结果。
 #    因此红基线只能在**当时的 152 项口径**下复现：实测 1496ffb 在其可运行的 152 项<!-- doccheck:allow: 红基线历史口径（152 项），刻意保留 -->
@@ -155,7 +155,7 @@ cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 mkdir -p .redcheck && cp test_harness.mjs .redcheck/
 git show 1496ffb:worker.js   > .redcheck/worker.js      # 修复前的 worker（1496ffb = 修复提交 b8f5846 的父提交）
 git show 1496ffb:snippets.js > .redcheck/snippets.js    # 修复前的 snippets（同上）
-( cd .redcheck && node test_harness.mjs | tail -n 3 )   # ⚠️ 当前 180 项 harness 在此会 SyntaxError（见上）
+( cd .redcheck && node test_harness.mjs | tail -n 3 )   # ⚠️ 当前 275 项 harness 在此会 SyntaxError（见上）
 rm -rf .redcheck
 # 说明：36 项红 → 0 项绿，才是"修复真实生效"的证据链；
 #       只跑绿的不跑红的，无法排除"测试本身就测不到"的可能。
@@ -305,7 +305,7 @@ S=$(wc -c < C:/Users/snove/workbuddy-ai/GitHub Project/graintcp/snippets.js)
 ```bash
 cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 S=$(wc -c < snippets.js)
-echo "长度=$S（基准 31446）"
+echo "长度=$S（基准 31463）"
 head -c 60 snippets.js; echo "   <- 首 60 字符（基准见下）"
 tail -c 2 snippets.js | cat -A              # 基准：} 后接 $（即以 LF 结尾）
 sha256sum snippets.js | cut -c1-12          # 基准：312c664da700
@@ -313,7 +313,7 @@ sha256sum snippets.js | cut -c1-12          # 基准：312c664da700
 
 | 校验项 | 基准值 |
 |---|---|
-| 长度 | **31446** 字节 |
+| 长度 | **31463** 字节 |
 | sha256（前 12 位） | **`93153be9504d`** |
 | 首 60 字符 | `const UUID="d675a8ea-61bc-4db9-a8a6-109ca1ec8385",SUB_PWD="s` |
 | 末字符 | `}`（文件以 LF 结尾） |
@@ -352,7 +352,7 @@ const SBV12="https://raw.githubusercontent.com/.../1.12.x/sing-box.json";
 |---|---|---|
 | 执行时间 | 无 5ms 级限制 | **5ms / 请求** |
 | 内存 | 宽松 | **2MB** |
-| 脚本/包体 | 单脚本限额宽松（`worker.obf.js` 861905B 可部署） | **32KB 硬限额**（`snippets.js` 31463B ✅） |
+| 脚本/包体 | 单脚本限额宽松（`worker.obf.js` 914491B 可部署） | **32KB 硬限额**（`snippets.js` 31463B ✅） |
 | 出站 subrequest 数 | 宽松 | **Pro 2 / Business 3 / Enterprise 5** ⚠️ 关键瓶颈 |
 | 持久化 | **有 D1**（绑定名 `DB`）+ `config`/`whitelist`/`logs`/`stats` | **无 D1** |
 | 管理面板 | 有（`/{SUB_PASSWORD}` 登录、`flag=` 系列） | **无面板** |
@@ -389,7 +389,7 @@ const SBV12="https://raw.githubusercontent.com/.../1.12.x/sing-box.json";
 L7 是**修复前的线上实测证据**（只读，供理解根因），L6 为待确认项。
 
 - **只想知道"修好没有"**：直接跑 **L8**（一条命令、两个断言，同时覆盖 P0 与 P1）。
-- **要完整交付**：跑 L0 → L8，并核对 L5 的 **180 项 0 失败** 与 **36 项红基线**。
+- **要完整交付**：跑 L0 → L8，并核对 L5 的 **275 项 0 失败** 与 **36/152 红基线（152 项时代历史基线，当前 275 项口径下不可复现）**。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
 - **L2 是 P0 的判定点，不通过就等于修复失败**，后面不用看。
 
 ### L0 基础可达性 `[curl 可判定]`
@@ -613,17 +613,18 @@ node test_harness.mjs     # 重点看「路径语法矩阵」「addrParser」两
 
 ```bash
 cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
-node test_harness.mjs        # 期望：180 项、0 失败
+node test_harness.mjs        # 期望：275 项、0 失败
 ```
 
-**判定标准**：**180 项、0 失败**，尤其关注 `xHTTP 双端全链路`、`gRPC 编解码`、`路径语法矩阵`、`addrParser` 四组。任一项红 → **不要部署**，退回 fullstack-engineer。
+**判定标准**：**275 项、0 失败**，尤其关注 `xHTTP 双端全链路`、`gRPC 编解码`、`路径语法矩阵`、`addrParser` 四组。任一项红 → **不要部署**，退回 fullstack-engineer。
 
-**红绿对照（权威数字，必看）**：对**修复前**的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑回归，实测 **36 项失败**（该提交早于 gRPC 功能，当前 180 项 harness 的导出清单依赖其不存在的符号，无法在其上完整运行；36 为其可运行项中的失败数）。
+**红绿对照（权威数字，必看）**：对**修复前**的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑回归，实测 **36 项失败**。
+> ⚠️ **口径说明（务必先读）**：这 **36 项是「152 项时代」的历史基线（36/152）**，得自当时的 152 项 harness。`1496ffb` 早于 gRPC 功能（P1-9），**当前 275 项 harness 的导出清单依赖该提交不存在的符号（如 `XH_GCHK`）**，在其上运行会直接 `SyntaxError`、一条用例都跑不到 —— **当前 275 项口径下红基线不可复现**。任何"在 275 项下复现红基线"的说法都是错的。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
 
-| 被测代码 | 结果 | 含义 |
-|---|---|---|
-| 修复前（`1496ffb`） | **36 项失败** | 红基线 —— 证明这套测试**确实能测出这些缺陷** |
-| 修复后（冻结基线） | **0 / 180 失败** | 绿 —— 证明缺陷已被消除 |
+| 被测代码 | 口径 | 结果 | 含义 |
+|---|---|---|---|
+| 修复前（`1496ffb`） | **152 项时代 harness** | **36 / 152 项失败** | 红基线 —— 证明这套测试**确实能测出这些缺陷**（历史口径，当前不可复现） | <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
+| 修复后（冻结基线） | 当前 275 项 harness | **0 / 275 失败** | 绿 —— 证明缺陷已被消除 |
 
 **36 项红分别落在 5 类缺陷上**（可用于确认"测试打中的就是我们要修的东西"）：
 
@@ -671,7 +672,7 @@ node test_harness.mjs        # 期望：180 项、0 失败
 | 项 | 现状 | 收口动作 |
 |---|---|---|
 | Snippets 侧 **subrequest 预算**（Pro 2 / Business 3 / Ent 5）是否被 `/proxyip=` 的 DoH 组合打爆（§3.4） | 未在真实计划上实测；**用户实测 WS 可用**，故不能断言现状已超限 | 用真实计划的 staging 跑一次 `/proxyip=` 路径，观察是否出现 subrequest 超限错误；若有，再决定是否做**仅 Snippets 的**降级（不得反向施加到 Workers） |
-| `worker.obf.js` 体积 861905B 距 Workers 单脚本限额的余量 | 未超限，可部署 | 每次重新混淆后确认体积未出现异常跳变（> 1.5MB 需排查混淆配置） |
+| `worker.obf.js` 体积 914491B 距 Workers 单脚本限额的余量 | 未超限，可部署 | 每次重新混淆后确认体积未出现异常跳变（> 1.5MB 需排查混淆配置） |
 
 > 标注原则：**未在真实运行时验证过的结论不写成"已验证"**。L6.2 两项为开放项，请勿在交付说明中表述为已通过。
 
@@ -835,6 +836,18 @@ done
 
 ### 5.2 探针与日志
 
+**批次 6 已落地部分**（此前本节 8 条 SLI/SLO **完全未落地**，现补上信号面）：
+
+- **`GET /health`**：批次 6 新增的存活探针端点，只返回 `{"ok":true,"t":<epoch秒>}`（不含版本号/UUID/任何配置值）。位于蜘蛛拦截之前，curl/拨测 UA 也能拿到。推荐外部拨测（GitHub Actions 5 min）判 `200 + ok:true`；也可以直接替换上表第 1 条里"判 `400 + 空 body`"这个反直觉判据。
+- **worker 内 `scheduled` 自检**：每个 Cron 周期探一次 D1（`SELECT 1`），失败落 `d1_ping_fail`；另落一条 `sched_tick` 心跳。
+- **结构化日志**：单行 JSON，`console.log/warn/error` 出口 → `wrangler tail` / Workers Logs 可直接按 `ev` 检索。样例：
+  `{"ts":"…","lvl":"error","ev":"tg_fail","n":1,"route":"path_pw_or_404","why":"api_false","streak":1,"db":1,"degraded":0}`
+  事件枚举：`d1_read_fail` / `d1_write_fail` / `d1_ping_fail` / `tg_fail` / `tg_recovered` / `tg_dash_degraded` / `sched_tick` / `auth_*`。
+  **热路径零日志**（WS / xHTTP 每帧、每连接无日志调用）；同一 `ev` 60 秒最多 1 条（被抑制条数记在 `drop` 字段）。
+- **TG 推送不再静默**：连续失败计数入 D1（无 D1 退化为内存），**连续 3 次进降级冷却 10 分钟**（冷却期内 `pushDashboard` 跳过，不硬试），恢复时发**一条**通知。⚠️ 无 D1 时降级状态不持久（isolate 重启即丢），信号只在日志里。
+- **敏感字段**：日志不记录 cookie / token / 口令 / UUID / `AUTH_SECRET` / bot token / IP；`/{SUB_PASSWORD}` 这类路径的 `route` 一律归一为 `path_pw_or_404`，**原始 pathname 不进日志**。
+- **开关**：`OBS_ENABLED=false` 一键静音；`OBS_MIN_LEVEL` 控制最低级别（默认 `info`）。两者**只从 `env.*` 读取，不支持 D1**，改完需重新部署。
+
 - **Workers**：`wrangler tail {WORKER_NAME} --format pretty` 实时看请求；Dashboard → Worker → Logs 看历史。
 - **Snippets**：Snippets 日志能力弱，建议**外置探针**（上面的 SLO 探针）而非依赖平台日志。
 - **D1 侧**：`SELECT date, count FROM stats ORDER BY date DESC LIMIT 7;` 看日请求量趋势；异常下跌通常先于用户报障。
@@ -879,7 +892,7 @@ wrangler deploy
 混淆器带随机性，见 §1.1.1 的说明）；随后按 **L0 → L2 → L8** 复测通过。
 
 > ⚠️ **回滚也要验行为，不能只看体积**：体积对不上不代表回滚失败（混淆产物不可复现），
-> 但**行为必须对上** —— 跑 `node test_harness.mjs`（180 项 0 失败）与 **L8** 验收协议。
+> 但**行为必须对上** —— 跑 `node test_harness.mjs`（275 项 0 失败）与 **L8** 验收协议。
 
 **方式三：临时切明文版定位（不是回滚，是排障）**
 
@@ -992,7 +1005,7 @@ Snippets 无版本历史，**只能靠备份文本**：
           （`worker.js:1623` / `2134` 附近；**修复前**该处 `decodeURIComponent` **未包 try** ⇒ 抛错 500；修复后已包 `try` 安全降级）。
           **证据**：红基线里 **12 项**失败全部属此类 —— worker/snippets × ws/xhF 入口 × 3 种非法编码
           （`%`、`%zz`、`%E0%A4%A`），期望"正常放行不崩溃"但旧代码抛错。
-          修复后这 12 项转绿（`node test_harness.mjs` → 180 项 0 失败）。
+          修复后这 12 项转绿（`node test_harness.mjs` → 275 项 0 失败）。
           判据：**把 URL 换成不含 `%3F` 的普通 path（如 `/xh`）重测；若 500 消失 ⇒ 属 F1。**
        F2【响应头类】❌ **假设已被实测否定**（见下方）
           普通 path 下仍 500 ⇒ 原本怀疑 `new Headers(XH_HD)`；但线上探针已证明
@@ -1029,11 +1042,11 @@ Snippets 无版本历史，**只能靠备份文本**：
 | 检查 | 命令要点 | 通过标准 |
 |---|---|---|
 | 备份就绪 | `sha256sum -c docs/backup/<STAMP>/SHA256SUMS.txt` | 全部 OK |
-| 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `a9aed13aeddb`/`312c664da700`/`572d32b515fd` |
+| 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `4434611cfa3b`/`312c664da700`/`6a06adca7279` |
 | 部署的是修复版 | `wrangler deploy` 输出的 Upload 体积 | ≈831KB（≈850949B，混淆版；明文版只有 300 多 KB） |
-| 混淆与源码同源 | 把产物复制成 `worker.js`、明文 `snippets.js` 放临时目录后跑同一套 harness | **180 项全绿、0 失败**（白名单为空、**0 容忍**，任何红一律 `exit≠0`） |
+| 混淆与源码同源 | 把产物复制成 `worker.js`、明文 `snippets.js` 放临时目录后跑同一套 harness | **275 项全绿、0 失败**（白名单为空、**0 容忍**，任何红一律 `exit≠0`） |
 | 断言未被静默跳过 | 产物保留顶层名（`renameGlobals:false`），故 `export { XH_HS }` 追加有效 | `XH_HS 域帧切片` 6 条在产物里**真跑且全绿**（`o+3→1`、`o+3+l→1`、`o+4+l→0`，两端各 3 条），**不是 skipped** |
-| 红绿对照 | 对 `1496ffb` 旧代码跑回归 | **36 项失败**（`1496ffb` 早于 gRPC，180 项 harness 无法在其上完整运行；证明测试确实能测出缺陷） |
+| 红绿对照 | 对 `1496ffb` 旧代码跑**当时的 152 项 harness** | **36 / 152 项失败**（**152 项时代历史基线**；`1496ffb` 早于 gRPC，当前 275 项 harness 在其上直接 `SyntaxError`，**当前口径不可复现**；证明测试确实能测出缺陷） | <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
 | 离线≠线上 | — | L5 全绿**不能**替代 L2 / L7 / L8 |
 | Snippets 体积门禁 | `wc -c snippets.js` ≤ 32768 | PASS（冻结基线 31463B） |
 | 边缘可达 | `curl /version?uuid={UUID}` | 200 + `Version:2142` |

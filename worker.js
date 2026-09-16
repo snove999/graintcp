@@ -1283,29 +1283,37 @@ function pCfg(url, path, fbPIP = null) {
 
   // 路径任意位置的 /ip= /proxyip= 已统一至 1c（避免两套逻辑互相覆盖）
 
-  // 路径任意位置的 /s5= /socks5= /http= /https=（EDT：g 前缀=全局，此处按回落处理）
-  const localMatch = path.match(/(?:^|\/)(socks?5?|s5|https?)[=\/]([^/#?]+)/i);
+  // 路径任意位置的 /s5= /socks5= /http= /https= /turn= /sstp=（EDT `_ref_edgetunnel.tmp:6270`）
+  // A-6：补齐 g 前缀（gs5= / ghttp= / ghttps= / gturn= / gsstp=）=「此代理全局生效」（连 ProxyIP 也走代理）。
+  //      正则仅在原字符集前加可选 `g`，原有无 g 输入的匹配结果与改动前完全一致。
+  let gLocal = false;
+  const localMatch = path.match(/(?:^|\/)(g?socks?5?|g?s5|g?https?|g?turn|g?sstp)[=\/]([^/#?]+)/i);
   if (localMatch && !s5) {
-    const lt = localMatch[1].toLowerCase();
+    const ltRaw = localMatch[1].toLowerCase();
+    gLocal = ltRaw.startsWith('g');
+    const lt = gLocal ? ltRaw.slice(1) : ltRaw;
     const isHttp = lt === 'http' || lt === 'https';
-    s5 = addrParser(localMatch[2], lt === 'https' ? 443 : isHttp ? 80 : 1080);
-    enS = isHttp ? lt : 'socks5';
+    s5 = addrParser(localMatch[2], lt === 'https' ? 443 : lt === 'sstp' ? 443 : lt === 'turn' ? 3478 : isHttp ? 80 : 1080);
+    enS = lt === 'sstp' ? 'sstp' : (lt === 'turn' ? 'turn' : (isHttp ? lt : 'socks5'));
     if (lt === 'https') s5.tls = 1;
   }
 
-  // 查询参数（EDT：?s5= ?socks5= ?http= ?https=；?globalproxy 或 ?global=1 提升为全局）
+  // 查询参数（EDT：?s5= ?socks5= ?http= ?https= ?turn= ?sstp=；?globalproxy 或 ?global=1 提升为全局）
   let qScheme = null, qValue = null;
-  for (const [k, t] of [['s5', 'socks5'], ['socks5', 'socks5'], ['http', 'http'], ['https', 'https']]) {
+  for (const [k, t] of [['s5', 'socks5'], ['socks5', 'socks5'], ['http', 'http'], ['https', 'https'], ['turn', 'turn'], ['sstp', 'sstp']]) {
     const v = url.searchParams.get(k);
     if (v) { qScheme = t; qValue = v; break; }
   }
   if (qValue && !s5 && !gP) {
-    s5 = addrParser(qValue, qScheme === 'https' ? 443 : qScheme === 'http' ? 80 : 1080);
+    s5 = addrParser(qValue, qScheme === 'https' || qScheme === 'sstp' ? 443 : qScheme === 'http' ? 80 : qScheme === 'turn' ? 3478 : 1080);
     enS = qScheme;
     if (qScheme === 'https') s5.tls = 1;
   }
-  if (s5 && !gP && (url.searchParams.has('globalproxy') || /^(?:1|true)$/i.test(url.searchParams.get('global') || ''))) {
-    gP = { type: enS === 'socks5' ? 'socks5' : 'http', cfg: s5 };
+  // A-6：g 前缀 = 全局（与既有 ?globalproxy / ?global=1 同义）
+  //      sstp / turn 一并提升为全局：回落分支（enS==='s5'）只实现 socks5/http，
+  //      若让 sstp/turn 留在回落里会走 htConn 发出错误的握手，故统一走 gP（与既有 ?turn= 一致）。
+  if (s5 && !gP && (gLocal || enS === 'sstp' || enS === 'turn' || url.searchParams.has('globalproxy') || /^(?:1|true)$/i.test(url.searchParams.get('global') || ''))) {
+    gP = { type: enS === 'socks5' ? 'socks5' : enS === 'sstp' ? 'sstp' : enS === 'turn' ? 'turn' : 'http', cfg: s5 };
     s5 = null; enS = null;
   }
   const pxParam = url.searchParams.get('proxyip');
@@ -1464,10 +1472,44 @@ const raceSprout = async (f, h, p) => {
 };
 
 /* ---------- 按 order 回落建连 ---------- */
-const tryCon = async (fetcher, addrType, host, port, routeCfg) => {
+/* ---------- A-12：GO2SOCKS5 直连白名单（对齐 EDT `_ref_edgetunnel.tmp:3` / `:50`） ---------- */
+let _GO2S5 = null;                                   // isolate 级缓存，对齐 EDT 的 缓存SOCKS5白名单
+async function _go2s5List(env) {
+  if (_GO2S5 !== null) return _GO2S5;
+  let raw = '';
+  try { raw = String((env && await getSafeEnv(env, 'GO2SOCKS5', '')) || ''); } catch (e) { raw = ''; }
+  _GO2S5 = raw.split(',').map(s => s.trim().toLowerCase())
+    // 格式闸门：只接受 [a-z0-9.*-]；显式禁止裸 '*' / '*.' / '**'（否则等于整体关闭 ProxyIP 出网收敛）
+    .filter(s => s && /^[a-z0-9.*-]+$/.test(s) && s !== '*' && s !== '*.' && s !== '**');
+  return _GO2S5;
+}
+// 匹配：精确主机名，或**点分后缀**（`*a.com` / `*.a.com` → host === 'a.com' || host.endsWith('.a.com')）。
+// 刻意不写 endsWith(s) 的子串包含，避免 'evil-a.com' 命中 'a.com'。
+function _go2s5Hit(list, hostname) {
+  const h = String(hostname || '').toLowerCase();
+  if (!h || !list || !list.length) return false;
+  for (const p of list) {
+    if (p.startsWith('*')) {
+      const s = p.startsWith('*.') ? p.slice(2) : p.slice(1);
+      if (s && (h === s || h.endsWith('.' + s))) return true;
+    } else if (h === p) return true;
+  }
+  return false;
+}
+
+const tryCon = async (fetcher, addrType, host, port, routeCfg, env) => {
   const { pIP, s5, enS, turn, gP, order } = routeCfg;
   const openSocket = (address, options) => fetcher.connect(address, options);
   const family = addrType === 1 ? 'ipv4' : addrType === 4 ? 'ipv6' : 'domain';
+
+  // A-12：命中 GO2SOCKS5 白名单 → 跳过 ProxyIP / 回落代理，改为直连。
+  // ★ 硬红线：白名单只改变「走不走代理」，**不改变「能不能连」** —— 目标仍必须过 _extHostSafe，
+  //   不豁免内网 / 回环 / 链路本地等封禁（白名单 ≠ 放行内网）。
+  //   未配 GO2SOCKS5 → 列表为空 → 恒 false → 对现有路径零影响。
+  if (_go2s5Hit(await _go2s5List(env), host)) {
+    if (!_extHostSafe(String(host)).ok) throw new Error('GO2SOCKS5 target blocked');
+    return await raceSprout(fetcher, host, port);
+  }
 
   // 全局代理优先，不回落到直连
   if (gP) {
@@ -1689,7 +1731,7 @@ const ws = async (req, env) => {
           server.send(new Uint8Array([d[0], 0]));
           const host = addr(r.addrType, r.targetAddrBytes), port = r.port;
           const payload = d.subarray(r.dataOffset);
-          sock = await tryCon(fetcher, r.addrType, host, port, routeCfg);
+          sock = await tryCon(fetcher, r.addrType, host, port, routeCfg, env);
           if (!sock) throw wither();
           curW = sock.writable.getWriter();
           const [first] = uq.bundle(payload);
@@ -1717,20 +1759,101 @@ const ws = async (req, env) => {
 };
 
 // =============================================================================
+// 🔭 批次 6：可观测性（低频结构化日志 + SLO 探针 + TG 推送可见性）
+// -----------------------------------------------------------------------------
+// ① 热路径零日志：WS / xHTTP 每帧、每连接路径上**不得**出现 obs() 调用
+// ② 单行 JSON：字段均为枚举/标量，Workers Logs / `wrangler tail` 可直接检索
+// ③ obs 只**同步**读 env.*（不查 D1）→ 零异步、零热路径开销
+// ④ 敏感值一律不落日志：cookie / token / 口令 / UUID / AUTH_SECRET / bot token / IP
+// ⑤ 按事件节流（60s/ev），错误也不刷屏；被抑制的条数计入 drop 字段
+// =============================================================================
+const OBS_LV = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
+const OBS_THROTTLE_MS = 60000;
+const _obsSt = { last: Object.create(null), drop: Object.create(null), n: 0 };
+function _obsReset() { _obsSt.last = Object.create(null); _obsSt.drop = Object.create(null); _obsSt.n = 0; }
+// 值脱敏：抹掉可能夹带的凭据（UUID / bot token / 长 hex），并截断长度
+function obsScrub(v, max = 160) {
+  let s;
+  try { s = (typeof v === 'string') ? v : String(v); } catch (e) { return '[unstringifiable]'; }
+  s = String(s == null ? '' : s)
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '[uuid]')
+    .replace(/\d{6,12}:[A-Za-z0-9_-]{30,}/g, '[bot_token]')
+    .replace(/\b[0-9a-f]{32,}\b/gi, '[hex]');
+  return s.length > max ? s.slice(0, max) + '…(' + s.length + ')' : s;
+}
+// 路由枚举：日志只记**枚举值**，绝不记原始 pathname
+// ⚠️ `/{SUB_PASSWORD}` 的 pathname 本身就是明文订阅口令 → 必须归一化（单段未知路径统一归为 path_pw_or_404）
+function routeEnum(pathname) {
+  const p = String(pathname || '');
+  if (p === '' || p === '/') return 'root';
+  if (p === '/health') return 'health';
+  if (p === '/robots.txt') return 'robots';
+  if (p === '/logout') return 'logout';
+  if (p === '/admin/check') return 'admin_check';
+  if (p === '/sub') return 'sub_query';
+  if (p === '/tg/webhook') return 'tg_webhook';
+  if (p === '/favicon.ico') return 'favicon';
+  if (p === '/version') return 'version';
+  if (/^\/[^/]+$/.test(p)) return 'path_pw_or_404';   // `/{SUB_PASSWORD}` 或未知单段 → 归一
+  return 'other';
+}
+// E6：补 err|error|msg|message（异常文本可能内嵌 URL/token）、host|hostname|url|target|proxy（回源与目标主机）、key（配置键名）
+const _OBS_DENY_RE = /cookie|token|secret|password|passwd|pwd|uuid|auth|chat|bot|apikey|api_key|ip|mail|err|error|msg|message|host|hostname|url|target|proxy|key/i;
+function obsRedact(extra) {
+  const out = {};
+  if (!extra || typeof extra !== 'object') return out;
+  for (const k of Object.keys(extra)) {
+    const v = extra[k];
+    if (v && typeof v === 'object') out[k] = '[obj]';
+    else if (_OBS_DENY_RE.test(k)) out[k] = '[redacted]';
+    else if (typeof v === 'string') out[k] = obsScrub(v, 120);
+    else out[k] = v;
+  }
+  return out;
+}
+// obs(lvl, ev, extra?, env?) —— 同步、可直接在 catch 里调用；返回是否真的输出
+function obs(lvl, ev, extra, env) {
+  try {
+    // 优化3：OBS_ENABLED 一并支持 D1 配置（同步读 _cfgCache，避免把 obs 改成 async 污染调用点）；env 显式配置优先
+    let _oe = env ? env.OBS_ENABLED : undefined;
+    if (_oe === undefined || _oe === null || _oe === '') {
+      try { const _m = _cfgCache && _cfgCache.map; if (_m && _m.has('OBS_ENABLED')) _oe = _m.get('OBS_ENABLED'); } catch (e) { }
+    }
+    if (String(_oe) === 'false') return false;
+    const name = String(ev || 'unknown');
+    const lv = OBS_LV[lvl] !== undefined ? OBS_LV[lvl] : OBS_LV.info;
+    let min = OBS_LV.info;
+    if (env && typeof env.OBS_MIN_LEVEL === 'string' && OBS_LV[env.OBS_MIN_LEVEL.toLowerCase()] !== undefined) min = OBS_LV[env.OBS_MIN_LEVEL.toLowerCase()];
+    if (lv < min) return false;
+    const now = Date.now();
+    if (now - (_obsSt.last[name] || 0) < OBS_THROTTLE_MS) { _obsSt.drop[name] = (_obsSt.drop[name] || 0) + 1; return false; }
+    _obsSt.last[name] = now;
+    const rec = { ts: new Date(now).toISOString(), lvl: lvl, ev: name, n: ++_obsSt.n };
+    if (_obsSt.drop[name]) { rec.drop = _obsSt.drop[name]; _obsSt.drop[name] = 0; }
+    const e = obsRedact(extra);
+    for (const k of Object.keys(e)) if (!(k in rec)) rec[k] = e[k];
+    const line = JSON.stringify(rec);
+    if (lv >= OBS_LV.error) console.error(line); else if (lv >= OBS_LV.warn) console.warn(line); else console.log(line);
+    return true;
+  } catch (e) { return false; }
+}
+
+// =============================================================================
 // 🗄️ 存储与配置
 // =============================================================================
 /* ---------- D1 config 全量缓存（30s TTL + 单飞加载；写路径调 cfgCacheReset 立即失效） ----------
  * 原实现每个未设键每次请求单独查一次 config 表，代理连接入口要串行打 ~40 次 D1；
  * 现改为每隔离实例 30s 缓存一张全表，所有键从内存解析 */
 const _cfgCache = { t: 0, map: null, p: null };
-function cfgCacheReset() { _cfgCache.t = 0; _cfgCache.map = null; }
+// E4：面板改配置时一并失效 GO2SOCKS5 白名单缓存（否则要等 isolate 回收才生效）
+function cfgCacheReset() { _cfgCache.t = 0; _cfgCache.map = null; try { _GO2S5 = null; } catch (e) { } }
 function _cfgFresh() { return _cfgCache.map && Date.now() - _cfgCache.t < 30000; }
 async function _cfgLoad(env) {
     const m = new Map();
     try {
         const { results } = await env.DB.prepare("SELECT key, value FROM config").all();
         for (const row of (results || [])) if (row && row.key) m.set(row.key, row.value);
-    } catch(e) {}
+    } catch(e) { obs('warn', 'd1_read_fail', { tbl: 'config' }, env); }
     _cfgCache.map = m; _cfgCache.t = Date.now();
     return m;
 }
@@ -1867,7 +1990,7 @@ async function logAccess(env, ip, region, action) {
         try {
             await env.DB.prepare("INSERT INTO logs (time, ip, region, action) VALUES (?, ?, ?, ?)").bind(time, safeIP, safeRegion, safeAction).run();
             await env.DB.prepare("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 2000)").run();
-        } catch (e) {}
+        } catch (e) { obs('warn', 'd1_write_fail', { tbl: 'logs' }, env); }
     }
 }
 async function logAccessThrottled(env, ip, region, action, ttlSeconds = 30) {
@@ -1887,7 +2010,7 @@ async function incrementDailyStats(env) {
                 _statsCleanDay = dateStr;
             }
             result = "1";
-        } catch(e) {}
+        } catch(e) { obs('warn', 'd1_write_fail', { tbl: 'stats' }, env); }
     }
     return result;
 }
@@ -1959,6 +2082,48 @@ async function getZoneDetail(env) {
     return { success: true, countries: pick(z.byCountry, 'clientCountryName'), statuses: pick(z.byStatus, 'edgeResponseStatus'), devices: pick(z.byDevice, 'clientDeviceType') };
   } catch (e) { return { success: false }; }
 }
+/* ---------- 批次 6：TG 推送可见性（连续失败计数 → 降级 → 恢复单次告警） ----------
+ * 改动前：sendTgMsg 是 fire-and-forget，fetch 失败被 .catch(()=>{}) 吞掉；
+ *        pushDashboard 的 edit→send 两级兜底若都失败，运维侧**零信号**。
+ * 改动后：失败计数入 D1（无 D1 时退化为 isolate 内存）+ 结构化日志；
+ *        连续失败 ≥3 次进降级冷却（TG_DEGRADE_MS 内不再反复尝试）；
+ *        恢复时发**一条**通知，且该条不参与失败计数（避免自激循环）。
+ */
+const TG_FAIL_DEGRADE = 3;
+const TG_DEGRADE_MS = 600000;
+let _tgStreakMem = 0, _tgDegradedMem = 0, _tgRecoverMem = false;
+async function tgStreak(env) {
+  if (env && env.DB) { const n = parseInt(await getSafeEnv(env, '_tg_fail_streak', ''), 10); return Number.isFinite(n) ? n : 0; }
+  return _tgStreakMem;
+}
+async function tgDegradedUntil(env) {
+  if (env && env.DB) { const n = parseInt(await getSafeEnv(env, '_tg_degraded_until', ''), 10); return Number.isFinite(n) ? n : 0; }
+  return _tgDegradedMem;
+}
+async function _tgSet(env, key, val, which) {
+  if (env && env.DB && await _dashWrite(env, key, val)) return true;
+  const n = parseInt(val, 10);
+  if (which === 'streak') _tgStreakMem = Number.isFinite(n) ? n : 0; else _tgDegradedMem = Number.isFinite(n) ? n : 0;
+  return false;
+}
+async function tgFailBump(env, route, why) {
+  _tgRecoverMem = false;
+  const n = (await tgStreak(env)) + 1;
+  await _tgSet(env, '_tg_fail_streak', String(n), 'streak');
+  const dg = n >= TG_FAIL_DEGRADE;
+  if (dg) await _tgSet(env, '_tg_degraded_until', String(Date.now() + TG_DEGRADE_MS), 'degraded');
+  obs('error', 'tg_fail', { route: route || 'unknown', why: why || 'unknown', streak: n, db: (env && env.DB) ? 1 : 0, degraded: dg ? 1 : 0 }, env);
+  return n;
+}
+async function tgFailClear(env, route) {
+  const n = await tgStreak(env);
+  if (n > 0) {
+    await _tgSet(env, '_tg_fail_streak', '0', 'streak');
+    await _tgSet(env, '_tg_degraded_until', '0', 'degraded');
+    obs('warn', 'tg_recovered', { route: route || 'unknown', had: n }, env);
+  }
+  return n;
+}
 async function sendTgMsg(ctx, env, title, r, detail = "", isAdmin = false) {
   const token = await getSafeEnv(env, 'TG_BOT_TOKEN', TG_BOT_TOKEN); const chat_id = await getSafeEnv(env, 'TG_CHAT_ID', TG_CHAT_ID);
   if (!token || !chat_id) return;
@@ -1969,7 +2134,21 @@ async function sendTgMsg(ctx, env, title, r, detail = "", isAdmin = false) {
     const safe = (str) => (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const text = `<b>${icon} ${safe(title)}</b>\n${roleTag}\n\n` + `<b>🕒 时间:</b> <code>${time}</code>\n` + `<b>🌍 IP:</b> <code>${safe(ip)}</code>\n` + `<b>🔗 域名:</b> <code>${safe(url.hostname)}</code>\n` + `<b>🛣️ 路径:</b> <code>${safe(url.pathname)}</code>\n` + `<b>📱 客户端:</b> <code>${safe(ua)}</code>\n` + (detail ? `<b>ℹ️ 详情:</b> ${safe(detail)}` : "");
     const params = { chat_id: chat_id, text: text, parse_mode: 'HTML', disable_web_page_preview: true };
-    const p = fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) }).catch(() => {});
+    const rt = routeEnum(url.pathname);   // 明文口令路径在此归一化；日志只记枚举
+    const p = fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) })
+      .then(async (res) => {
+        let bad = !res || !res.ok, why = 'http_' + ((res && res.status) || 0);
+        // TG 业务错误常以 HTTP 200 + {"ok":false} 返回，必须读 body 才看得见
+        if (!bad) { try { const t = await res.text(); if (/"ok"\s*:\s*false/.test(t)) { bad = true; why = 'api_false'; } } catch (e) {} }
+        if (bad) { await tgFailBump(env, rt, why); return; }
+        const had = await tgFailClear(env, rt);
+        // 降级后首次成功 → 只发**一条**恢复通知；该条不参与失败计数（不再走 tgFailBump）
+        if (had >= TG_FAIL_DEGRADE && !_tgRecoverMem) {
+          _tgRecoverMem = true;
+          try { await fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chat_id, text: `✅ TG 推送已恢复（此前连续失败 ${had} 次）` }) }).catch(() => {}); } catch (e) {}
+        }
+      })
+      .catch(async () => { await tgFailBump(env, rt, 'network'); });
     if(ctx && ctx.waitUntil) ctx.waitUntil(p);
   } catch(e) {}
 }
@@ -2041,11 +2220,19 @@ async function _dashRead(env, keys) {
   return out;
 }
 async function _dashWrite(env, key, value) {
-  if (env.DB) { try { await env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(key, String(value), String(value)).run(); } catch (e) {} try { cfgCacheReset(); } catch (e) {} }
+  // R1-a：返回写入是否成功（原先吞掉全部异常，调用方无法判断值是否已持久化）
+  if (!env.DB) return false;
+  // 批次 6：写库失败留 signal（不记录 key/value，避免配置值进日志）
+  try { await env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(key, String(value), String(value)).run(); } catch (e) { obs('error', 'd1_write_fail', { tbl: 'config' }, env); return false; }
+  try { cfgCacheReset(); } catch (e) {}
+  return true;
 }
 async function pushDashboard(env) {
   const enabled = await getSafeEnv(env, 'STATS_ENABLED', 'false');
   if (enabled !== 'true') return;
+  // 批次 6：降级冷却 —— 连续失败 ≥TG_FAIL_DEGRADE 次后不再每个周期硬试（信号已在 tg_fail 日志里）
+  const _dgUntil = await tgDegradedUntil(env);
+  if (_dgUntil && Date.now() < _dgUntil) { obs('warn', 'tg_dash_degraded', { left_s: Math.round((_dgUntil - Date.now()) / 1000) }, env); return; }
   const token = await getSafeEnv(env, 'TG_BOT_TOKEN', TG_BOT_TOKEN);
   const chat_id = (await getSafeEnv(env, 'STATS_CHAT_ID', '')) || (await getSafeEnv(env, 'TG_CHAT_ID', TG_CHAT_ID));
   if (!token || !chat_id) return;
@@ -2061,8 +2248,9 @@ async function pushDashboard(env) {
   }
   if (!ok) {
     const s = await tgApi(token, 'sendMessage', { chat_id, text, parse_mode: 'HTML', disable_web_page_preview: true });
-    if (s && s.ok && s.result) { msgId = s.result.message_id; await _dashWrite(env, '_dash_msg_id', msgId); }
-  }
+    if (s && s.ok && s.result) { msgId = s.result.message_id; await _dashWrite(env, '_dash_msg_id', msgId); await tgFailClear(env, 'dash'); }
+    else await tgFailBump(env, 'dash', 'send');   // edit + send 两级兜底均失败 → 计数 + 日志（不再静默）
+  } else await tgFailClear(env, 'dash');
   await _dashWrite(env, '_dash_last_total', cur.total);
 }
 async function replyStats(env, chatId) {
@@ -2098,30 +2286,53 @@ XH_CAT=(a,b)=>{const o=new Uint8Array(a.length+b.length);return o.set(a),o.set(b
 // ===== gRPC 传输（Xray gun 协议，对齐 EDT 处理gRPC请求 978-1222）=====
 // 帧 = [1B 压缩标志 0x00] [4B 大端长度] [消息体]；消息体 = protobuf Hunk（field1=bytes: 0x0a + varint(len) + data）
 // 上行剥帧并解 Hunk；下行封 Hunk 再封帧
-const XH_GCHK=b=>{if(!b||b.length<5||b[0]!==0)return!1;const n=((b[1]<<24)>>>0)|(b[2]<<16)|(b[3]<<8)|b[4];if(n<1||n>0x1000000)return!1;if(b.length>=5+n&&b[5]!==10)return!1;return!0};
+const GMAX=0x400000,XH_GMAXBUF=0x800000;
+const XH_GCHK=b=>{if(!b||b.length<5||b[0]!==0)return!1;const n=((b[1]<<24)>>>0)|(b[2]<<16)|(b[3]<<8)|b[4];if(n<1||n>GMAX)return!1;if(b.length<6||b[5]!==10)return!1;return!0};
 const XH_GFR=c=>{c=c instanceof Uint8Array?c:new Uint8Array(c);const L=[];let r=c.byteLength>>>0;while(r>127){L.push((r&127)|128);r>>>=7}L.push(r);const n=1+L.length+c.byteLength,f=new Uint8Array(5+n);f[0]=0;f[1]=(n>>>24)&255;f[2]=(n>>>16)&255;f[3]=(n>>>8)&255;f[4]=n&255;f[5]=10;f.set(new Uint8Array(L),6);f.set(c,6+L.length);return f};
-const XH_GDEC=b=>{const o=[];const p=b;const len=p.length;let off=0;while(len-off>=5){const n=((p[off+1]<<24)>>>0)|(p[off+2]<<16)|(p[off+3]<<8)|p[off+4],f=5+n;if(len-off<f)break;const body=p.subarray(off+5,off+f);off+=f;if(!body.length)continue;let q=body;if(q.length>=2&&q[0]===10){let i=1,s=0,k=!1;while(i<q.length){const c=q[i++];if(!(c&128)){k=!0;break}s+=7;if(s>35)break}if(k)q=q.subarray(i)}if(q.length)o.push(q)}return{out:o,rest:off?p.subarray(off):p}};
+const XH_GDEC=b=>{const o=[];const p=b;const len=p.length;let off=0;while(len-off>=5){const n=((p[off+1]<<24)>>>0)|(p[off+2]<<16)|(p[off+3]<<8)|p[off+4];if(n<1||n>GMAX)break;const f=5+n;if(len-off<f)break;const body=p.subarray(off+5,off+f);off+=f;if(!body.length)continue;let q=body;if(q.length>=2&&q[0]===10){let i=1,s=0,k=!1;while(i<q.length){const c=q[i++];if(!(c&128)){k=!0;break}s+=7;if(s>35)break}if(k)q=q.subarray(i)}if(q.length)o.push(q)}return{out:o,rest:off?p.subarray(off):p}};
 const XH_GUP=(head,rd,d0)=>{
-let p=head||new Uint8Array(0);
-const em=c=>{const r=XH_GDEC(p);p=r.rest;r.out.forEach(x=>c.enqueue(x))};
+// E1（中危）：原实现用 `p=XH_CAT(p,v)` 每次追加都全量重分配 → 单次 O(|p|)，
+// 攻击者声明 n=GMAX(=4MiB) 却永不补齐该帧时，XH_GDEC 恒无产出、parseVP 永不执行（UUID 校验绕不过去），
+// 但 pull 仍持续缓冲至 8MiB → 总拷贝 O(K×|p|)。改为「容量倍增 + 高位游标压缩」的摊还 O(n) 缓冲：
+//   · 追加：容量不足时才倍增重分配 → 摊还 O(1)
+//   · 压缩：仅当游标越过半程（off > len/2，即死区 > 活区）才 copyWithin → 摊还 O(1)
+let _b=(head&&head.length)?head:new Uint8Array(0),_len=_b.length,_off=0,_cap=_b.length;
+const _grow=add=>{let c=_cap||4096;while(c<_len+add)c*=2;const nb=new Uint8Array(c);nb.set(_b.subarray(_off,_len));_len-=_off;_off=0;_b=nb;_cap=c};
+const _push=v=>{if(_off>(_len>>1)){_b.copyWithin(0,_off,_len);_len-=_off;_off=0}if(_len+v.byteLength>_cap)_grow(v.byteLength);_b.set(v,_len);_len+=v.byteLength};
+const _view=()=>_b.subarray(_off,_len);
+let end=!!d0;
+const em=c=>{const v=_view();const r=XH_GDEC(v);_off+=v.length-r.rest.length;let k=0;for(let i=0;i<r.out.length;i++){c.enqueue(r.out[i]);k++}return k};
+const badLen=()=>{const v=_view();if(v.length<5)return!1;const n=((v[1]<<24)>>>0)|(v[2]<<16)|(v[3]<<8)|v[4];return n<1||n>GMAX};
 return new ReadableStream({
-async start(c){
-em(c);if(d0){c.close();return}
-try{for(;;){const{done,value}=await rd.read();if(done){em(c);c.close();return}if(value&&value.byteLength){p=XH_CAT(p,value instanceof Uint8Array?value:new Uint8Array(value));em(c)}}}
-catch(e){try{c.error(e)}catch{}}
+async pull(c){
+try{
+if(em(c))return;
+if(badLen()){try{c.error(new Error('grpc bad frame length'))}catch{}end=!0;return}
+if(end){c.close();return}
+for(;;){
+const{done,value}=await rd.read();
+if(done){end=!0;em(c);c.close();return}
+if(!value||!value.byteLength)continue;
+const v=value instanceof Uint8Array?value:new Uint8Array(value);
+if((_len-_off)+v.byteLength>XH_GMAXBUF){try{c.error(new Error('grpc frame too large'))}catch{}end=!0;return}
+_push(v);
+if(em(c))return;
+}
+}catch(e){try{c.error(e)}catch{}}
 }
 });
 };
-const XH_REW=(head,rd,d0)=>new ReadableStream({
-async start(c){
-if(head&&head.length)c.enqueue(head);
+const XH_REW=(head,rd,d0)=>{let hd=head;return new ReadableStream({
+async pull(c){
+try{
+if(hd&&hd.length){const h=hd;hd=null;c.enqueue(h);return}
 if(d0){c.close();return}
-try{for(;;){const{done,value}=await rd.read();if(done){c.close();return}c.enqueue(value)}}
-catch(e){try{c.error(e)}catch{}}
+for(;;){const{done,value}=await rd.read();if(done){c.close();return}if(value&&value.byteLength){c.enqueue(value);return}}
+}catch(e){try{c.error(e)}catch{}}
 }
-});
+});};
 const XH_pdFeat=e=>{const h=e.headers.get(XH_PDH);let v="";if(h){try{const q=new URL(h,"https://x.invalid").searchParams.get(XH_PDK);v=q||h}catch{v=h}}v=v||new URL(e.url).searchParams.get(XH_PDK)||"";return!!v};
-const XH_isGrpc=e=>((e.headers.get('content-type')||'').toLowerCase().startsWith('application/grpc'))&&!XH_pdFeat(e);
+const XH_isGrpc=e=>{const ct=((e.headers.get('content-type')||'').toLowerCase().split(';')[0]).trim();return ct==='application/grpc'&&!XH_pdFeat(e)};
 async function xhF(req, env, fbPip){if(!req.body)return new Response(null,{status:400});if(!XH_pdChk(req))return new Response("Bad Request",{status:400});
 // ① 读首包：XH_HS 就绪判定 + parseVP（内含 matchID UUID 校验），读完立即 releaseLock（对齐 EDT 读取叉HTTP首包）
 const rd0=req.body.getReader();let buf=new Uint8Array(0),ss=null;
@@ -2136,7 +2347,7 @@ let rm=null;
 try{let fbPIP=fbPip||DEFAULT_PROXY_IP;if(fbPIP)fbPIP=String(fbPIP).replace(/^https?:\/\//i,"").replace(/\/+$/,"");
 const rc=pCfg(url,url.pathname.slice(1),fbPIP),hn=addr(ss.addrType,ss.targetAddrBytes);
 if(!rc.gP&&XH_ST(hn))return new Response(XH_CAT(new Uint8Array([buf[0],0]),new TextEncoder().encode("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")),{status:200,headers:XH_HD});
-rm=await tryCon(req.fetcher,ss.addrType,hn,ss.port,rc)}catch(e2){try{XH_R(rm)}catch{}return new Response("xhERR:"+((e2&&e2.message)||"unknown"),{status:502})}
+rm=await tryCon(req.fetcher,ss.addrType,hn,ss.port,rc,env)}catch(e2){try{XH_R(rm)}catch{}return new Response("xhERR:"+((e2&&e2.message)||"unknown"),{status:502})}
 // ③ 首包负载直写远端
 try{const w2=rm.writable.getWriter();try{if(ss.dataOffset<buf.length)await w2.write(buf.subarray(ss.dataOffset))}finally{try{w2.releaseLock()}catch{}}}catch(e3){try{XH_R(rm)}catch{}return new Response("xhERR:"+((e3&&e3.message)||"unknown"),{status:502})}
 // ④ 响应头
@@ -2163,7 +2374,7 @@ return new Response(ts.readable,{status:200,headers:hh})}
 async function grpF(req, env, fbPip){
   if(!req.body)return new Response(null,{status:400});
   const rd=req.body.getReader();let head=new Uint8Array(0),d0=!1;
-  try{while(head.length<5){const{done,value}=await rd.read();if(done){d0=!0;break}if(value&&value.byteLength)head=XH_CAT(head,value instanceof Uint8Array?value:new Uint8Array(value))}}catch{d0=!0}
+  try{while(head.length<6){const{done,value}=await rd.read();if(done){d0=!0;break}if(value&&value.byteLength)head=XH_CAT(head,value instanceof Uint8Array?value:new Uint8Array(value))}}catch{d0=!0}
   const mk=body=>({url:req.url,method:req.method,headers:req.headers,body,cf:req.cf,fetcher:req.fetcher});
   if(!XH_GCHK(head))return xhF(mk(XH_REW(head,rd,d0)),env,fbPip);
   const res=await xhF(mk(XH_GUP(head,rd,d0)),env,fbPip);
@@ -2265,7 +2476,18 @@ export default {
         const _tgs = await getSafeEnv(env, 'TG_WEBHOOK_SECRET', '');
         if (_tgs && r.headers.get('X-Telegram-Bot-Api-Secret-Token') !== _tgs) return new Response('forbidden', { status: 403 });
         // R4：未配置 secret 时告警（一次性；仍放行以免打断现网，收敛靠用户配置 TG_WEBHOOK_SECRET）
-        if (!_tgs) { try { if (!(await getSafeEnv(env, '_wh_secret_warned', ''))) { ctx.waitUntil(sendTgMsg(ctx, env, "⚠️ 安全告警：TG webhook 未配置 secret_token，建议在面板点「设置 Webhook」", r, "webhook 自检", true)); await _dashWrite(env, '_wh_secret_warned', '1'); } } catch (e) {} }
+        // 残留#5：无 D1 时 _dashWrite 无效、_wh_secret_warned 恒读空 → 公开 POST 端点可被匿名放大成管理员 TG 骚扰
+        //        故无 D1 时改用 isolate 级内存标志保证「一次性」（有 D1 时保持持久化语义）
+        if (!_tgs) {
+          try {
+            if (env.DB) {
+              if (!(await getSafeEnv(env, '_wh_secret_warned', ''))) { ctx.waitUntil(sendTgMsg(ctx, env, "⚠️ 安全告警：TG webhook 未配置 secret_token，建议在面板点「设置 Webhook」", r, "webhook 自检", true)); await _dashWrite(env, '_wh_secret_warned', '1'); }
+            } else if (!globalThis.__whWarned) {
+              globalThis.__whWarned = 1;
+              ctx.waitUntil(sendTgMsg(ctx, env, "⚠️ 安全告警：TG webhook 未配置 secret_token，建议在面板点「设置 Webhook」", r, "webhook 自检", true));
+            }
+          } catch (e) {}
+        }
         try {
           const update = await r.json();
           const msg = update && (update.message || update.channel_post);
@@ -2278,6 +2500,13 @@ export default {
         } catch (e) {}
         return new Response('ok');
       }
+
+      // A-11：/robots.txt —— 必须插在蜘蛛拦截之前，否则搜索引擎永远拿不到（EDT `_ref_edgetunnel.tmp:500`）
+      if (url.pathname === '/robots.txt') return new Response('User-agent: *\nDisallow: /', { status: 200, headers: { 'Content-Type': 'text/plain; charset=UTF-8', 'Cache-Control': 'no-store' } });
+
+      // 批次 6：/health —— SLO 探针存活端点（同样必须在蜘蛛拦截之前，否则 curl/拨测 UA 一律 404）
+      // ⚠️ 只返回「健康与否必需的最小信息」：不含版本号 / 部署形态 / UUID / 任何配置值；不写日志、不计数
+      if (url.pathname === '/health') return new Response(JSON.stringify({ ok: true, t: Math.floor(Date.now() / 1000) }), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 
       if (UA_L.includes('spider') || UA_L.includes('bot') || UA_L.includes('python') || UA_L.includes('scrapy') || UA_L.includes('curl') || UA_L.includes('wget')) {
           return new Response('Not Found', { status: 404 });
@@ -2299,15 +2528,28 @@ export default {
         let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
         return d === 0;
       }
-      // R1：密钥优先 AUTH_SECRET；未配时生成 24B 随机并持久化（仅 D1 可用时），避免 HMAC 密钥=登录口令；均不可用时回退口令派生（兼容）
+      // R1-a / 残留#3 / R1-b：返回 HMAC 会话密钥；返回 '' 表示「无安全密钥可用」，调用方必须据此拒绝签发 cookie
+      //   ① AUTH_SECRET（长度 ≥16，弱密钥一律忽略并告警）→ ② D1 持久化的 24B 随机（写后读回校验）→ ③ 写库失败则回退口令派生并告警
+      //   ④ 无 D1 且未配 AUTH_SECRET → 返回 ''（不拿公开默认口令当密钥，见 R1-b）
       const _authSecret = async (env) => {
-        const cfg = await getSafeEnv(env, 'AUTH_SECRET', '');
-        if (cfg) return cfg;
-        let auto = await getSafeEnv(env, '_AUTH_SECRET_AUTO', '');
-        if (!auto && env.DB) {
-          try { auto = _hex(crypto.getRandomValues(new Uint8Array(24))); await _dashWrite(env, '_AUTH_SECRET_AUTO', auto); } catch (e) { auto = ''; }
+        const cfg = String(await getSafeEnv(env, 'AUTH_SECRET', '') || '');
+        if (cfg) {
+          if (cfg.length >= 16) return cfg;
+          obs('warn', 'auth_secret_weak', { len: cfg.length }, env);
         }
-        return auto || _WEB_PW;
+        let auto = String(await getSafeEnv(env, '_AUTH_SECRET_AUTO', '') || '');
+        if (!auto && env.DB) {
+          const gen = _hex(crypto.getRandomValues(new Uint8Array(24)));
+          if (await _dashWrite(env, '_AUTH_SECRET_AUTO', gen)) auto = String(await getSafeEnv(env, '_AUTH_SECRET_AUTO', '') || '');
+          if (!auto) {
+            // R1-a/E5：绝不返回「未持久化的随机值」（否则每请求轮换、登录后立即掉线）。
+            // E5：此分支若回退 _WEB_PW，HMAC 密钥可能仍是源码公开默认口令，与 R1-b 的 fail-closed 不一致 →
+            //     统一返回 ''，由登录端点走 503 no_secret 路径，绝不签发 cookie。
+            obs('error', 'auth_secret_persist_fail', {}, env);
+            return '';
+          }
+        }
+        return auto;   // 无 D1 且未配强 AUTH_SECRET → '' → R1-b：登录端点据此拒绝签发
       };
 
       if (_WEB_PW) {
@@ -2316,9 +2558,12 @@ export default {
           const v = m[1], dot = v.lastIndexOf('.');
           const exp = Number(v.slice(0, dot)), sig = v.slice(dot + 1);
           if (Number.isFinite(exp) && exp > Date.now()) {
-            const ua = r.headers.get('User-Agent') || '';
-            const expect = await _hmacHex(await _authSecret(env), `${ua}|${exp}`);
-            if (_ctEq(sig, expect)) hasAuthCookie = true;
+            const _sec = await _authSecret(env);
+            if (_sec) {
+              const ua = r.headers.get('User-Agent') || '';
+              const expect = await _hmacHex(_sec, `${ua}|${exp}`);
+              if (_ctEq(sig, expect)) hasAuthCookie = true;
+            }
           }
         }
       }
@@ -2339,6 +2584,77 @@ export default {
         return new Response(null, { status: 404 });
       }
       
+      // A-11：GET /logout —— 路径形式（EDT `_ref_edgetunnel.tmp:300`）；现有 ?flag=logout 保持可用。
+      // Location 固定为 '/'，无开放重定向面。
+      if (url.pathname === '/logout') {
+        const _lo = new Response('重定向中...', { status: 302, headers: { 'Location': '/', 'Cache-Control': 'no-store' } });
+        _lo.headers.set('Set-Cookie', 'auth=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax');
+        return _lo;
+      }
+
+      // A-11：admin/check —— 用指定代理连 cloudflare.com/cdn-cgi/trace 验证出口连通（EDT `_ref_edgetunnel.tmp:138`）
+      // 三重闸门：① 强制鉴权 ② 代理主机过 _extHostSafe（SSRF）③ 目标主机固定 cloudflare.com:80（不可由参数指定）
+      if (url.pathname === '/admin/check') {
+        const _cj = (o, s) => new Response(JSON.stringify(o), { status: s || 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+        if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+        const _ckProto = ['socks5', 'http', 'https'].find(t => url.searchParams.has(t)) || null;
+        if (!_ckProto) return _cj({ success: false, error: '缺少代理参数（socks5 / http / https）' }, 400);
+        const _ckCfg = addrParser(url.searchParams.get(_ckProto), _ckProto === 'https' ? 443 : _ckProto === 'http' ? 80 : 1080);
+        if (!_ckCfg || !_ckCfg.hostname || !_ckCfg.port) return _cj({ success: false, error: '代理参数解析失败' }, 400);
+        if (!_extHostSafe(String(_ckCfg.hostname)).ok) return _cj({ success: false, error: '代理主机不在允许范围' }, 400); // ★ SSRF 闸门
+        if (_ckProto === 'https') _ckCfg.tls = 1;
+        const _ckTag = _ckProto + '://' + _ckCfg.hostname + ':' + _ckCfg.port;
+        const _ckT0 = Date.now();
+        // 超时兜底：connect 阶段 8s、写阶段 5s（优化#1）、读阶段单次 5s、整体 12s。任一超限 → 明确错误，绝不挂起。
+        // E3：给 Promise.race 的**败方**挂 .catch(()=>{})，避免超时/异常后产生未处理 rejection。
+        const _ckTO = (p, ms, msg) => {
+          let t = null;
+          if (p && typeof p.catch === 'function') p.catch(() => { });
+          const tp = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(msg)), ms); });
+          tp.catch(() => { });
+          return Promise.race([p, tp]).finally(() => { if (t) clearTimeout(t); });
+        };
+        // E3：socket 与 reader 提到 try 外，清理统一放 finally —— 异常路径同样必须关闭，否则连接泄漏至 isolate 回收
+        let _ckSock = null, _ckR = null, _ckW = null;
+        try {
+          const _ckF = r.fetcher;
+          if (!_ckF || typeof _ckF.connect !== 'function') return _cj({ success: false, proxy: _ckTag, error: '当前运行环境不支持出口检测', responseTime: Date.now() - _ckT0 }, 501);
+          // 目标固定 cloudflare.com:80：明文 HTTP 取 /cdn-cgi/trace，无需 TLS 栈
+          _ckSock = await _ckTO(
+            _ckProto === 'socks5'
+              ? s5Conn(_ckF, 3, 'cloudflare.com', 80, _ckCfg)
+              : htConn(_ckF, 3, 'cloudflare.com', 80, _ckCfg),
+            8000, '连接代理超时（8s）');
+          _ckW = _ckSock.writable.getWriter();
+          await _ckTO(
+            _ckW.write(new TextEncoder().encode('GET /cdn-cgi/trace HTTP/1.1\r\nHost: cloudflare.com\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n')),
+            5000, '写检测请求超时（5s）');
+          _ckW.releaseLock();
+          _ckR = _ckSock.readable.getReader();
+          let _ckBuf = '', _ckIp = '', _ckLoc = '';
+          while (Date.now() - _ckT0 < 12000) {
+            const _rdP = _ckR.read(); _rdP.catch(() => { });
+            const _ckV = await Promise.race([
+              _rdP,
+              new Promise(res => setTimeout(() => res({ done: true, value: undefined }), 5000))
+            ]);
+            if (_ckV.done) break;
+            _ckBuf += new TextDecoder().decode(_ckV.value || new Uint8Array(0));
+            const _m = _ckBuf.match(/^ip=(.*)$/m);
+            if (_m) { _ckIp = _m[1].trim(); const _l = _ckBuf.match(/^loc=(.*)$/m); _ckLoc = _l ? _l[1].trim() : ''; break; }
+          }
+          // 未取到 ip= → 明确报「出网 80 端口不可达/被拒」，不静默返回 success:false 而不给原因
+          if (!_ckIp) return _cj({ success: false, proxy: _ckTag, error: '未取到 cloudflare.com/cdn-cgi/trace 响应（出网 80 端口不可达或被代理拒绝）', responseTime: Date.now() - _ckT0 });
+          return _cj({ success: true, proxy: _ckTag, ip: _ckIp, loc: _ckLoc, responseTime: Date.now() - _ckT0 });
+        } catch (e) {
+          return _cj({ success: false, proxy: _ckTag, error: String((e && e.message) || e), responseTime: Date.now() - _ckT0 });
+        } finally {
+          try { _ckW && _ckW.releaseLock(); } catch (e) { }
+          try { _ckR && _ckR.releaseLock(); } catch (e) { }
+          try { _ckSock && _ckSock.close(); } catch (e) { }
+        }
+      }
+
       const flag = url.searchParams.get('flag');
       if (!flag && env.DB) ctx.waitUntil(incrementDailyStats(env));
       // P1-1：服务端登录/登出（HMAC 会话 cookie，HttpOnly）
@@ -2346,8 +2662,12 @@ export default {
         // R3：IP 维度失败退避（isolate 级 best-effort，防在线暴破；60s 内 5 次失败→封 60s）
         const _lf = (globalThis.__loginFail ||= new Map());
         const _lk = clientIP || 'unknown', _now = Date.now();
+        // 残留#4：惰性清理已过期项（until 已过 且 超出 60s 窗口）；容量硬上限 10k，超限整体清空防内存放大
+        if (_lf.size > 64) { for (const [k, v] of _lf) if (v.until <= _now && _now - v.t > 60000) _lf.delete(k); }
+        if (_lf.size > 10000) _lf.clear();
         const _lr = _lf.get(_lk);
-        if (_lr && _lr.until > _now) return new Response(JSON.stringify({ ok: false, msg: 'too many attempts' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
+        // 残留#4：'unknown' 桶（无 cf-connecting-ip，如经前置代理）不参与退避 —— 否则单一攻击者可占满该桶误封所有合法用户
+        if (_lk !== 'unknown' && _lr && _lr.until > _now) return new Response(JSON.stringify({ ok: false, msg: 'too many attempts' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
         const body = await parseJSONBody(r).catch(() => null);
         const pw = String((body && body.pwd) || '');
         if (!_ctEq(pw, _WEB_PW)) {
@@ -2357,9 +2677,15 @@ export default {
           return new Response(JSON.stringify({ ok: false }), { status: 403, headers: { 'Content-Type': 'application/json' } });
         }
         _lf.delete(_lk);
+        // R1-b：无 D1 且未配置（强）AUTH_SECRET 时，HMAC 密钥只能是公开默认口令 → 拒绝面板登录、不签发 cookie
+        const _sec = await _authSecret(env);
+        if (!_sec) {
+          obs('warn', 'auth_no_secret', {}, env);
+          return new Response(JSON.stringify({ ok: false, msg: 'no_secret: 请绑定 D1 数据库，或配置 AUTH_SECRET（≥16 字符）后重试；当前环境无法安全签发面板会话' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
         const ua = r.headers.get('User-Agent') || '';
         const exp = Date.now() + 86400000;
-        const sig = await _hmacHex(await _authSecret(env), `${ua}|${exp}`);
+        const sig = await _hmacHex(_sec, `${ua}|${exp}`);
         return new Response(JSON.stringify({ ok: true }), { status: 200, headers: {
           'Content-Type': 'application/json',
           'Set-Cookie': `auth=${exp}.${sig}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400`
@@ -2387,6 +2713,17 @@ export default {
           if (flag === 'save_config' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); try { const body = await r.json(); const ALLOWED_KEYS = new Set(['ADD','ADDAPI','ADDCSV','ADDSUB','DLS','TG_BOT_TOKEN','TG_CHAT_ID','CF_ID','CF_TOKEN','CF_EMAIL','CF_KEY','PROXYIP','SUB_DOMAIN','SUBAPI','PS','LOGIN_PAGE_TITLE','DASHBOARD_TITLE','TG_GROUP_URL','SITE_URL','GITHUB_URL','PROXY_CHECK_URL','CLASH_CONFIG','SINGBOX_CONFIG_V11','SINGBOX_CONFIG_V12','WL_IP','ECH_ENABLED','ECH_SNI','ECH_DNS','STATS_ENABLED','STATS_CHAT_ID','CF_ZONE_ID']); for (const [k, v] of Object.entries(body)) { if (!ALLOWED_KEYS.has(k)) continue; if (env.DB) await env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(k, v, v).run(); } if (env.DB) cfgCacheReset(); return new Response(JSON.stringify({status: 'ok'}), { headers: { 'Content-Type': 'application/json' } }); } catch(e) { return new Response(JSON.stringify({status: 'error', msg: e.toString()}), { headers: { 'Content-Type': 'application/json' } }); } }
       }
 
+      // A-7：TLS 分片订阅参数（对齐 EDT `_ref_edgetunnel.tmp:353`）
+      // 仅用户显式配置 TLS_FRAGMENT 时追加；未配 → 空串，对订阅输出零影响。
+      // A-3：订阅域名随机化（默认关闭；需 RANDOM_HOST=1 且配置 HOSTS 才生效 → 未开启时零影响）
+      const _rndOn = ['1', 'true'].includes(String(await getSafeEnv(env, 'RANDOM_HOST', '')).toLowerCase());
+      const _rndHosts = _rndOn ? _parseHosts(await getSafeEnv(env, 'HOSTS', '')) : [];
+      // A-7：TLS 分片订阅参数（对齐 EDT `_ref_edgetunnel.tmp:353`）
+      // 仅用户显式配置 TLS_FRAGMENT 时追加；未配 → 空串，对订阅输出零影响。
+      const _fragMode = String(await getSafeEnv(env, 'TLS_FRAGMENT', '')).trim().toLowerCase();
+      const _fragQ = _fragMode === 'shadowrocket' ? '&fragment=' + encodeURIComponent('1,40-60,30-50,tlshello')
+          : _fragMode === 'happ' ? '&fragment=' + encodeURIComponent('3,1,tlshello') : '';
+
       if (_SUB_PW && url.pathname === `/${_SUB_PW}`) {
           ctx.waitUntil(logAccess(env, clientIP, `${city},${country}`, "订阅更新"));
           const isFlagged = url.searchParams.has('flag');
@@ -2406,7 +2743,13 @@ export default {
           
           // ===== 自适应订阅：完整客户端适配（参考 EDT 2.1）=====
           const _manualTarget = url.searchParams.get('target');
-          const 订阅类型 = _manualTarget
+          // A-4：target=mixed = 钉死「通用 base64 混合订阅」（对齐 EDT 回源约定 `_ref_edgetunnel.tmp:457`）。
+          // 我们不是「忘了钉 target」而是没有 target 概念：`flag=true` 的原生路径本身即 mixed 语义。
+          // 注意：若把 mixed 当成普通 target 交给转换后端，会形成「本端→后端→本端」递归，故显式判空走原生路径。
+          const _mtMixed = String(_manualTarget || '').toLowerCase() === 'mixed';
+          const 订阅类型 = _mtMixed
+            ? null
+            : (_manualTarget
             ? _manualTarget
             : (UA_L.includes('cl'+'ash') || UA_L.includes('me'+'ta') || UA_L.includes('mi'+'ho'+'mo') || UA_L.includes('fl'+'cl'+'ash') || UA_L.includes('st'+'ash') || UA_L.includes('nek'+'obo'+'x'))
               ? 'clash'
@@ -2418,7 +2761,7 @@ export default {
                     ? 'quanx'
                     : UA_L.includes('lo'+'on')
                       ? 'loon'
-                      : null;
+                      : null);
 
           // 构造上游 subUrl：同时兼容 Desire 与 workerVless2sub 参数契约
           let _subUrl;
@@ -2465,7 +2808,8 @@ export default {
                   try {
                       const gen = await fetchSubGenerator('sub://' + _SUB_DOMAIN);
                       if (gen.ips.length) {
-                          _urlParam = `https://${host}/${_SUB_PW}?flag=true` + (requestProxyIp ? `&proxyip=${encodeURIComponent(requestProxyIp)}` : '');
+                          // A-4：回源钉 &target=mixed，确保转换后端回来抓到的是通用混合格式（EDT `_ref_edgetunnel.tmp:457`）
+                          _urlParam = `https://${host}/${_SUB_PW}?flag=true&target=mixed` + (requestProxyIp ? `&proxyip=${encodeURIComponent(requestProxyIp)}` : '');
                       }
                   } catch(e) {}
               }
@@ -2478,9 +2822,14 @@ export default {
                   }
               }
 
+              // A-5：转换器补 udp / xudp / tls13 / append_type（EDT `_ref_edgetunnel.tmp:457`），默认全开
+              const _cvtExtra = `&udp=${encodeURIComponent(await getSafeEnv(env, 'SUB_UDP', 'true'))}`
+                  + `&xudp=${encodeURIComponent(await getSafeEnv(env, 'SUB_XUDP', 'true'))}`
+                  + `&tls13=${encodeURIComponent(await getSafeEnv(env, 'SUB_TLS13', 'true'))}`
+                  + `&append_type=${encodeURIComponent(await getSafeEnv(env, 'SUB_APPEND_TYPE', 'true'))}`;
               let lastRes = null;
               for (const config of configList) {
-                  const subApi = `${_CONVERTER}/${'sub?tar'+'get='}${subApiTarget}&url=${encodeURIComponent(_urlParam)}&config=${encodeURIComponent(config)}${'&emo'+'ji=true&li'+'st=false&so'+'rt=false&fd'+'n=false&sc'+'v=false'}`;
+                  const subApi = `${_CONVERTER}/${'sub?tar'+'get='}${subApiTarget}&url=${encodeURIComponent(_urlParam)}&config=${encodeURIComponent(config)}${'&emo'+'ji=true&li'+'st=false&so'+'rt=false&fd'+'n=false&sc'+'v=false'}${_cvtExtra}`;
                   try {
                       const res = await fetch(subApi, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } });
                       if (res.ok) { lastRes = res; break; }
@@ -2512,7 +2861,7 @@ export default {
                 try {
                     const gen = await fetchSubGenerator('sub://' + _SUB_DOMAIN);
                     if (gen.ips.length) {
-                        body = (gen.links.length ? gen.links.join('\n') + '\n' : '') + genNodes(host, _UUID, requestProxyIp, gen.ips, "");
+                        body = (gen.links.length ? gen.links.join('\n') + '\n' : '') + genNodes(host, _UUID, requestProxyIp, gen.ips, "", null, _fragQ);
                         success = true;
                     }
                 } catch(e) {}
@@ -2577,7 +2926,7 @@ export default {
           // ===== 兜底：本地生成 =====
           const allIPs = await getCustomIPs(env, _DLS);
           const _fbIPs = _agg.ips.length ? [...new Set(allIPs.concat(_agg.ips))] : allIPs;
-          const listText = genNodes(host, _UUID, requestProxyIp, _fbIPs, _PS, _agg.pipSet);
+          const listText = genNodes(host, _UUID, requestProxyIp, _fbIPs, _PS, _agg.pipSet, _fragQ);
           const fallbackBody = btoa(unescape(encodeURIComponent(_aggPrefix + listText)));
           _subHeaders['Content-Type'] = 'text/plain; charset=utf-8';
           return new Response(fallbackBody, { status: 200, headers: _subHeaders });
@@ -2663,8 +3012,28 @@ export default {
           }
           // ===== 原有逻辑保持不变 =====
 
+          // A-1：BEST_SUB 订阅生成器哨兵（对齐 EDT `_ref_edgetunnel.tmp:305`）
+          // 命中时把 /sub 当作上游优选订阅生成器调用，跳过 UUID 校验 → **安全面**。
+          //
+          // E2（中危）：原屏障无效。① SUB_DOMAIN 只是 save_config 的常规面板配置项，普遍会填，不是秘密；
+          //   ② 三个魔术参数（host=example.com / uuid=00000000-… / UA 含 tunnel (https://github.com/）
+          //   **全是源码字面量，本项目开源，任何人可读**；命中后返回 genNodes(host,_UUID,…) 的完整
+          //   base64 订阅，内含真实 UUID / proxyIP / 优选 IP = 凭据完全泄露。
+          // → 改为强随机令牌 BEST_SUB_TOKEN（≥32 字符），未配置则整个分支**永不启用**；
+          //   请求须以 ?bst= 携带该令牌并做**常量时间比较**。三个魔术参数保留为「形状信号」，不再是唯一屏障。
+          const _bstCfg = String(await getSafeEnv(env, 'BEST_SUB_TOKEN', '') || '');
+          // 纵深防御：SUB_DOMAIN 门槛（team-lead 第四轮裁定）与强令牌**叠加**，不是二选一
+          const _subDomCfg = String((await getSafeEnv(env, 'SUB_DOMAIN', '')) || (await getSafeEnv(env, 'SUB', '')) || '').trim();
+          const _bstOn = !!_subDomCfg && _bstCfg.length >= 32;
+          const _bstReq = String(url.searchParams.get('bst') || '');
+          const _BEST_SUB = _bstOn
+              && _ctEq(_bstReq, _bstCfg)
+              && ['1', 'true'].includes(String(await getSafeEnv(env, 'BEST_SUB', '')).toLowerCase())
+              && url.searchParams.get('host') === 'example.com'
+              && url.searchParams.get('uuid') === '00000000-0000-4000-8000-000000000000'
+              && UA_L.includes('tunnel (https://github.com/');
           const requestUUID = url.searchParams.get('uuid');
-          if (!requestUUID || requestUUID.toLowerCase() !== _UUID.toLowerCase()) {
+          if (!_BEST_SUB && (!requestUUID || requestUUID.toLowerCase() !== _UUID.toLowerCase())) {
               ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "常规订阅失败(UUID错误)", 30));
               return new Response('Invalid UUID', { status: 403 });
           }
@@ -2676,8 +3045,10 @@ export default {
           // ADDSUB 汇聚：透传节点在前，优选地址合并进节点模板
           const _agg2 = await getAggregated(env);
           const _regIPs = _agg2.ips.length ? [...new Set(allIPs.concat(_agg2.ips))] : allIPs;
-          const listText = genNodes(host, _UUID, proxyIp, _regIPs, _PS, _agg2.pipSet);
-          const _regBody = (_agg2.links.length ? _agg2.links.join('\n') + '\n' : '') + listText;
+          const listText = genNodes(host, _UUID, proxyIp, _regIPs, _PS, _agg2.pipSet, _fragQ);
+          let _regBody = (_agg2.links.length ? _agg2.links.join('\n') + '\n' : '') + listText;
+          // A-3：替换必须在 base64 之前；EDT 在 UA 含 subconverter 时跳过（转换后端需稳定回源）
+          if (_rndHosts.length && !UA_L.includes('subconverter')) _regBody = _randHostBody(_regBody, host, _rndHosts);
           return new Response(btoa(unescape(encodeURIComponent(_regBody))), { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
       }
 
@@ -2720,7 +3091,15 @@ export default {
     }
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(pushDashboard(env));
+    // 批次 6：Cron 自检（辅探针）—— D1 连通性探测 + 心跳；失败落结构化日志（按事件 60s 节流）
+    ctx.waitUntil((async () => {
+      if (env.DB) {
+        try { await env.DB.prepare("SELECT 1").all(); }
+        catch (e) { obs('error', 'd1_ping_fail', { err: String((e && e.message) || e) }, env); }
+      }
+      obs('info', 'sched_tick', { cron: String((event && event.cron) || '?'), db: env.DB ? 1 : 0 }, env);
+      await pushDashboard(env);
+    })());
   }
 };
 
@@ -2728,7 +3107,32 @@ export default {
 // 📋 UI & 节点生成
 // =============================================================================
 
-function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet) {
+/* ---------- A-3：订阅域名随机化（对齐 EDT `_ref_edgetunnel.tmp:469` + `5424`） ---------- */
+// HOSTS 白名单：只接受 [a-z0-9.*-]，拒绝含 / @ : 的值，防止节点 URI 被注入
+// 优化4：对齐 GO2SOCKS5 口径 —— 拒绝裸 "*" 与无点项（避免"配错即断网"：无点项会替换掉整段入口域名，裸 * 等于全量随机化）
+const _parseHosts = (s) => String(s || '').split(',').map(x => x.trim().toLowerCase()).filter(x => x && /^[a-z0-9.*-]+$/.test(x) && x !== '*' && x.includes('.'));
+// 优化2：Fisher-Yates 均匀洗牌（原 sort(()=>Math.random()-0.5) 分布不均，会让前几个域名出现频率偏高）
+function _fyShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+// 把域名里的 * 换成 3~16 位随机 [a-z0-9]
+function _starRand(s) {
+  if (typeof s !== 'string' || !s.includes('*')) return s;
+  const cs = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  return s.replace(/\*/g, () => { let o = ''; const n = Math.floor(Math.random() * 14) + 3; for (let i = 0; i < n; i++) o += cs[Math.floor(Math.random() * cs.length)]; return o; });
+}
+// 每 2 次出现换一个域名（EDT 节奏），base 为占位/原入口域名
+function _randHostBody(body, base, hosts) {
+  if (!body || !base || !hosts || !hosts.length) return body;
+  const shuffled = _fyShuffle([...hosts]);
+  const esc = String(base).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let cnt = 0, cur = null;
+  return body.replace(new RegExp(esc, 'g'), () => {
+    if (cnt % 2 === 0) cur = _starRand(shuffled[Math.floor(cnt / 2) % shuffled.length]);
+    cnt++;
+    return cur;
+  });
+}
+
+function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet, fragQ = '') {
   let echParam = '';
   if (ECH) {
     echParam = `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}`;
@@ -2740,7 +3144,7 @@ function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet) {
       const path = proxyIP ? `/proxyip=${proxyIP}` : "/";
       const nodeName = `${psName || 'Worker'} - Default`;
       const defaultHost = formatHostForUrl(proxyIP || host);
-      const vLink = `${P_V}://${uuid}@${defaultHost}:443${commonUrlPart}&path=${encodeURIComponent(path)}#${encodeURIComponent(nodeName)}`;
+      const vLink = `${P_V}://${uuid}@${defaultHost}:443${commonUrlPart}&path=${encodeURIComponent(path)}${fragQ}#${encodeURIComponent(nodeName)}`;
       return vLink;
   }
   for (const ipInfo of customIPs) {
@@ -2754,7 +3158,7 @@ function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet) {
           for (const p of pipSet) { if (p && p.includes(ip)) { path = `/proxyip=${p}`; break; } }
       }
       let nodeName = uniqueName || ip; if (psName) nodeName = `${nodeName}${separator}`;
-      const vLink = `${P_V}://${uuid}@${formatHostForUrl(ip)}:${port}${commonUrlPart}&path=${encodeURIComponent(path)}#${encodeURIComponent(nodeName)}`;
+      const vLink = `${P_V}://${uuid}@${formatHostForUrl(ip)}:${port}${commonUrlPart}&path=${encodeURIComponent(path)}${fragQ}#${encodeURIComponent(nodeName)}`;
       result.push(vLink);
   }
   return result.join('\n');
