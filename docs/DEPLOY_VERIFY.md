@@ -1,5 +1,15 @@
 # GrainTCP 部署 · 线上验证 · 回滚手册
 
+<!-- doccheck:baseline
+harness_total=180
+file.worker.js.bytes=361753
+file.worker.js.sha256_12=a9aed13aeddb
+file.snippets.js.bytes=31463
+file.snippets.js.sha256_12=312c664da700
+file.worker.obf.js.bytes=861905
+file.worker.obf.js.sha256_12=572d32b515fd
+-->
+
 > 适用版本：本次 xHTTP 下行断流（P0）、`/proxyip=` 路径解析（P1）、gRPC 帧编解码（P1-9）与 `XH_GDEC` O(n²) DoS 加固（G.2）修复后
 > 项目根：`C:/Users/snove/workbuddy-ai/GitHub Project/graintcp`
 > 双部署形态：**Workers**（`worker.js` / 线上跑 `worker.obf.js`）· **Snippets**（`snippets.js`，32KB 硬限额）
@@ -49,9 +59,9 @@
 
 | 部署目标 | 应部署文件 | 大小（冻结基线实测） | 说明 |
 |---|---|---|---|
-| Workers | **`worker.obf.js`** | 850949B（≈831KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
-| Workers（排障临时） | `worker.js` | 355249B | 明文版，便于看堆栈；需改 `main` 才能部署 |
-| Snippets | **`snippets.js`**（明文） | 31286B（≈30.6KB） | ✅ **唯一可部署版本**（≤ 32768B） |
+| Workers | **`worker.obf.js`** | 861905B（≈842KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
+| Workers（排障临时） | `worker.js` | 361753B | 明文版，便于看堆栈；需改 `main` 才能部署 |
+| Snippets | **`snippets.js`**（明文） | 31463B（≈30.7KB） | ✅ **唯一可部署版本**（≤ 32768B） |
 
 > 🔴 **一句话记住产物对应关系**：**Workers 用 `worker.obf.js`；Snippets 必须贴明文 `snippets.js`**。
 > （`snippets.obf.js` 已废弃删除：它必然超 32KB、从来不是部署件，`_obfuscate.mjs` 也不再生成它。）
@@ -68,9 +78,9 @@
 
 | 文件 | sha256（前 12 位） | 大小 |
 |---|---|---|
-| `worker.js`（明文，Workers 源） | `513e011d6de9…` | — |
-| `snippets.js`（明文，**Snippets 部署件**） | `fc557e2d7fbc…` | 31286B |
-| `worker.obf.js`（**Workers 部署件**） | `62be6c787840…` | 850949B |
+| `worker.js`（明文，Workers 源） | `a9aed13aeddb…` | — |
+| `snippets.js`（明文，**Snippets 部署件**） | `312c664da700…` | 31463B |
+| `worker.obf.js`（**Workers 部署件**） | `572d32b515fd…` | 861905B |
 | `test_harness.mjs` | — | **180 项** |
 
 ```bash
@@ -78,12 +88,12 @@ cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 sha256sum worker.js snippets.js worker.obf.js | cut -c1-12
 ```
 
-**判定标准**：明文两项前缀对上 `513e011d6de9` / `fc557e2d7fbc`（确认"源码没被改过"）。
-`worker.obf.js` 的前缀 `62be6c787840` **仅标识"仓库里提交的这一份"**，重建后会变 —— 见下方警告。
+**判定标准**：明文两项前缀对上 `cef32273a828` / `93153be9504d`（确认"源码没被改过"）。
+`worker.obf.js` 的前缀 `572d32b515fd` **仅标识"仓库里提交的这一份"**，重建后会变 —— 见下方警告。
 
 > ⚠️ **哈希的正确用法（务必分清，否则会误判）**
 > - **明文 `worker.js` / `snippets.js` 的哈希是权威且稳定的** —— 用来确认"这份源码没被改过"。
-> - **混淆产物 `worker.obf.js` 的哈希只用于标识"仓库里提交的这一份"**，**不能**用来判断"产物与源码是否一致"。`_obfuscate.mjs` 开了 `controlFlowFlattening(0.7)` / `stringArrayRotate` / `stringArrayShuffle`，**带随机性，字节与体积都不可复现**（同一份源码实测三次构建：`worker.obf.js` 845231B → 853000B → 850949B）。**合法重建后哈希变了是正常的，不要据此拒绝部署。**
+> - **混淆产物 `worker.obf.js` 的哈希只用于标识"仓库里提交的这一份"**，**不能**用来判断"产物与源码是否一致"。`_obfuscate.mjs` 开了 `controlFlowFlattening(0.7)` / `stringArrayRotate` / `stringArrayShuffle`，**带随机性，字节与体积都不可复现**（同一份源码实测三次构建：`worker.obf.js` 845231B → 853000B → 850949B）。**合法重建后哈希变了是正常的，不要据此拒绝部署。**<!-- doccheck:allow: 混淆产物漂移示例（历史实测三次值），刻意保留 -->
 > - 因此上面那句"对不上就别部署"**只适用于明文**。对混淆产物，唯一有效的门禁是**行为等价**：
 >   ```bash
 >   # 把产物 + 明文部署件放进临时目录，跑同一套回归，看行为是否等价
@@ -139,7 +149,7 @@ node test_harness.mjs      # 期望：180 项、0 失败
 # ⚠️ 修复前的提交 1496ffb 早于 gRPC 功能（P1-9）；当前 180 项 harness 的导出清单
 #    硬依赖 gRPC 符号（XH_GCHK/XH_GFR/XH_GDEC/XH_isGrpc/XH_pdFeat），1496ffb 无这些
 #    符号 → 在其上跑当前 harness 会在**导入阶段 SyntaxError**、无法产出结果。
-#    因此红基线只能在**当时的 152 项口径**下复现：实测 1496ffb 在其可运行的 152 项
+#    因此红基线只能在**当时的 152 项口径**下复现：实测 1496ffb 在其可运行的 152 项<!-- doccheck:allow: 红基线历史口径（152 项），刻意保留 -->
 #    中 **36 项失败**（5 类缺陷），证明用例确实能测出缺陷（非空洞）。
 cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 mkdir -p .redcheck && cp test_harness.mjs .redcheck/
@@ -159,7 +169,7 @@ else echo "FAIL $SNIP=$S > 32768（Cloudflare Snippets 硬限额），拒绝部�
 
 > `snippets.obf.js` 已废弃删除（`_obfuscate.mjs` 不再生成它）——它必然超 32KB、从来不是部署件。
 > `test_harness.mjs` 全文不含 `snippets.obf.js` 体积断言（该断言针对的是**部署件 `snippets.js`**）。
-> （harness 里那条体积断言针对的是**部署件 `snippets.js`**，当前 31286B ≤ 32768，通过。）
+> （harness 里那条体积断言针对的是**部署件 `snippets.js`**，当前 31463B ≤ 32768，通过。）
 
 ---
 
@@ -199,7 +209,8 @@ wrangler secret put UUID             # 粘贴 {UUID}
 ```bash
 cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 node _obfuscate.mjs        # 保证 worker.obf.js 与 worker.js 同源（见 1.3）
-node _predeploy_check.mjs  # 部署前独立预检（产物同源 / snippets ≤32KB / 产物存在），任一不过即拒绝部署（等价 `npm run predeploy`）
+node _predeploy_check.mjs  # 部署前独立预检（产物同源 / snippets ≤32KB / 产物存在 / 文档数据自查），任一不过即拒绝部署（等价 `npm run predeploy`）
+npm run doccheck           # 文档数据自查：文档声明的项数/字节数/sha256/路径 vs 实际（也可由上一行自动带跑；`DOCCHECK=off` 可临时跳过）
 wrangler deploy            # 打包并发布 main 指向的文件
 wrangler deployments list  # 记下本次 Version ID，回滚要用
 ```
@@ -263,7 +274,7 @@ D1 `config` 表（面板「保存配置」写入，键名与环境变量同名�
 | 项 | 要求 | 判定 |
 |---|---|---|
 | 计划 | **付费计划**（Free 无 Snippets 功能） | Dashboard 能看到 Rules → Snippets 入口 |
-| 体积 | **≤ 32768 字节（硬限额）** | `wc -c snippets.js` → 冻结基线实测 31286 字节（≈30.6KB）✅ |
+| 体积 | **≤ 32768 字节（硬限额）** | `wc -c snippets.js` → 冻结基线实测 31463 字节（≈30.7KB）✅ |
 | CPU | 5ms/请求 | 轻量形态，勿加面板类重逻辑 |
 
 ```bash
@@ -287,26 +298,26 @@ S=$(wc -c < C:/Users/snove/workbuddy-ai/GitHub Project/graintcp/snippets.js)
 
 #### 3.2.1 ⭐ 粘贴保真校验（Snippets 独有的真实风险）
 
-`snippets.js` **不是单行文件**：共 **60 行**，其中压缩块**最长行 11627 字符**。实测无 CR、无 BOM、无控制字符（除 `\n`/`\t`），以单个 LF 结尾，末字符为 `}`，含中文注释（合法非 ASCII）。
+`snippets.js` **不是单行文件**：共 **61 行**，其中压缩块**最长行 11627 字符**。实测无 CR、无 BOM、无控制字符（除 `\n`/`\t`），以单个 LF 结尾，末字符为 `}`，含中文注释（合法非 ASCII）。
 
 **真实风险是"超长行被编辑器回折/截断"和"智能引号替换"（`"` → `“ ”`），不是字符级损坏。** 粘贴后**必须回读校验**：
 
 ```bash
 cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 S=$(wc -c < snippets.js)
-echo "长度=$S（基准 31286）"
+echo "长度=$S（基准 31446）"
 head -c 60 snippets.js; echo "   <- 首 60 字符（基准见下）"
 tail -c 2 snippets.js | cat -A              # 基准：} 后接 $（即以 LF 结尾）
-sha256sum snippets.js | cut -c1-12          # 基准：fc557e2d7fbc
+sha256sum snippets.js | cut -c1-12          # 基准：312c664da700
 ```
 
 | 校验项 | 基准值 |
 |---|---|
-| 长度 | **31286** 字节 |
-| sha256（前 12 位） | **`fc557e2d7fbc`** |
+| 长度 | **31446** 字节 |
+| sha256（前 12 位） | **`93153be9504d`** |
 | 首 60 字符 | `const UUID="d675a8ea-61bc-4db9-a8a6-109ca1ec8385",SUB_PWD="s` |
 | 末字符 | `}`（文件以 LF 结尾） |
-| 行数 / 最长行 | 60 行 / 11627 字符 |
+| 行数 / 最长行 | 61 行 / 11627 字符 |
 
 > ⚠️ 上述长度与哈希是**当前冻结版**的值。**若后续再改动源码，这组基准必须同步更新**（体积会变）。
 
@@ -341,7 +352,7 @@ const SBV12="https://raw.githubusercontent.com/.../1.12.x/sing-box.json";
 |---|---|---|
 | 执行时间 | 无 5ms 级限制 | **5ms / 请求** |
 | 内存 | 宽松 | **2MB** |
-| 脚本/包体 | 单脚本限额宽松（`worker.obf.js` 850949B 可部署） | **32KB 硬限额**（`snippets.js` 31286B ✅） |
+| 脚本/包体 | 单脚本限额宽松（`worker.obf.js` 861905B 可部署） | **32KB 硬限额**（`snippets.js` 31463B ✅） |
 | 出站 subrequest 数 | 宽松 | **Pro 2 / Business 3 / Enterprise 5** ⚠️ 关键瓶颈 |
 | 持久化 | **有 D1**（绑定名 `DB`）+ `config`/`whitelist`/`logs`/`stats` | **无 D1** |
 | 管理面板 | 有（`/{SUB_PASSWORD}` 登录、`flag=` 系列） | **无面板** |
@@ -660,7 +671,7 @@ node test_harness.mjs        # 期望：180 项、0 失败
 | 项 | 现状 | 收口动作 |
 |---|---|---|
 | Snippets 侧 **subrequest 预算**（Pro 2 / Business 3 / Ent 5）是否被 `/proxyip=` 的 DoH 组合打爆（§3.4） | 未在真实计划上实测；**用户实测 WS 可用**，故不能断言现状已超限 | 用真实计划的 staging 跑一次 `/proxyip=` 路径，观察是否出现 subrequest 超限错误；若有，再决定是否做**仅 Snippets 的**降级（不得反向施加到 Workers） |
-| `worker.obf.js` 体积 850949B 距 Workers 单脚本限额的余量 | 未超限，可部署 | 每次重新混淆后确认体积未出现异常跳变（> 1.5MB 需排查混淆配置） |
+| `worker.obf.js` 体积 861905B 距 Workers 单脚本限额的余量 | 未超限，可部署 | 每次重新混淆后确认体积未出现异常跳变（> 1.5MB 需排查混淆配置） |
 
 > 标注原则：**未在真实运行时验证过的结论不写成"已验证"**。L6.2 两项为开放项，请勿在交付说明中表述为已通过。
 
@@ -1018,13 +1029,13 @@ Snippets 无版本历史，**只能靠备份文本**：
 | 检查 | 命令要点 | 通过标准 |
 |---|---|---|
 | 备份就绪 | `sha256sum -c docs/backup/<STAMP>/SHA256SUMS.txt` | 全部 OK |
-| 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `513e011d6de9`/`fc557e2d7fbc`/`62be6c787840` |
+| 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `a9aed13aeddb`/`312c664da700`/`572d32b515fd` |
 | 部署的是修复版 | `wrangler deploy` 输出的 Upload 体积 | ≈831KB（≈850949B，混淆版；明文版只有 300 多 KB） |
 | 混淆与源码同源 | 把产物复制成 `worker.js`、明文 `snippets.js` 放临时目录后跑同一套 harness | **180 项全绿、0 失败**（白名单为空、**0 容忍**，任何红一律 `exit≠0`） |
 | 断言未被静默跳过 | 产物保留顶层名（`renameGlobals:false`），故 `export { XH_HS }` 追加有效 | `XH_HS 域帧切片` 6 条在产物里**真跑且全绿**（`o+3→1`、`o+3+l→1`、`o+4+l→0`，两端各 3 条），**不是 skipped** |
 | 红绿对照 | 对 `1496ffb` 旧代码跑回归 | **36 项失败**（`1496ffb` 早于 gRPC，180 项 harness 无法在其上完整运行；证明测试确实能测出缺陷） |
 | 离线≠线上 | — | L5 全绿**不能**替代 L2 / L7 / L8 |
-| Snippets 体积门禁 | `wc -c snippets.js` ≤ 32768 | PASS（冻结基线 31286B） |
+| Snippets 体积门禁 | `wc -c snippets.js` ≤ 32768 | PASS（冻结基线 31463B） |
 | 边缘可达 | `curl /version?uuid={UUID}` | 200 + `Version:2142` |
 | 订阅可达 | `curl /sub?uuid={UUID}` | 200 + 体积 > 0 |
 | 面板可达 | `curl /{SUB_PASSWORD}` | 200 + HTML |

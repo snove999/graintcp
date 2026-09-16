@@ -2090,10 +2090,10 @@ const XH_hfLen=t=>{const b=new TextEncoder().encode(t);let n=0;for(let i=0;i<b.l
 XH_pdGen=n=>{let r="";for(let i=0;i<n;i++)r+=XH_B62[Math.random()*62|0];return r},
 XH_pdChk=e=>{const h=e.headers.get(XH_PDH);let v="";if(h){try{const q=new URL(h,"https://x.invalid").searchParams.get(XH_PDK);v=q||h}catch{v=h}}v=v||new URL(e.url).searchParams.get(XH_PDK)||"";if(!v)return!0;const l=XH_hfLen(v);return l>=98&&l<=1002},
 XH_ST=h=>{h=String(h).toLowerCase();return h==="speed.cloudflare.com"||h==="cp.cloudflare.com"||h.endsWith(".speed.cloudflare.com")||h.endsWith(".cp.cloudflare.com")},
-XH_UP=rm=>{const w=rm.writable.getWriter(),b=new Uint8Array(20480);let n=0,t=null,q=Promise.resolve();
-const fl=()=>{if(!n)return;const c=b.slice(0,n);n=0;q=q.then(()=>w.write(c)).catch(()=>{})};
-const wq=v=>{q=q.then(()=>w.write(v)).catch(()=>{})};
-return{put(v){if(!v||!v.length)return;if(v.length>=20480){fl();wq(v);return}n+v.length>20480&&fl();b.set(v,n),n+=v.length,t||(t=setTimeout(()=>{t=null;fl()},1))},end(){t&&(clearTimeout(t),t=null);fl();return q.then(()=>w.close()).catch(()=>{})}}},
+XH_UP=rm=>{const w=rm.writable.getWriter(),b=new Uint8Array(20480);let n=0,t=null,q=Promise.resolve(),pending=0,err=null;
+const fl=()=>{if(!n)return;const c=b.slice(0,n);n=0;pending+=c.length;q=q.then(()=>w.write(c)).then(()=>{pending-=c.length}).catch(e=>{err=e})};
+const wq=v=>{pending+=v.length;q=q.then(()=>w.write(v)).then(()=>{pending-=v.length}).catch(e=>{err=e})};
+return{put(v){if(!v||!v.length)return;if(v.length>=20480){fl();wq(v);return pending>=1048576?q:void 0}n+v.length>20480&&fl();b.set(v,n),n+=v.length,t||(t=setTimeout(()=>{t=null;fl()},1));return pending>=1048576?q:void 0},end(){t&&(clearTimeout(t),t=null);fl();return q.then(()=>{if(err)throw err;return w.close()})}}},
 XH_CAT=(a,b)=>{const o=new Uint8Array(a.length+b.length);return o.set(a),o.set(b,a.length),o};
 // ===== gRPC 传输（Xray gun 协议，对齐 EDT 处理gRPC请求 978-1222）=====
 // 帧 = [1B 压缩标志 0x00] [4B 大端长度] [消息体]；消息体 = protobuf Hunk（field1=bytes: 0x0a + varint(len) + data）
@@ -2156,7 +2156,7 @@ try{await w.write(new Uint8Array([buf[0],0]))}catch(e){try{await w.abort(e)}catc
 await rm.readable.pipeTo(ts.writable,{signal:ac.signal})})();
 dnP.then(clean,clean);
 const upP=(async()=>{const ub=XH_UP(rm);rd=req.body.getReader();
-try{for(;;){const{done:dn,value}=await rd.read();if(dn)break;if(value&&value.byteLength)ub.put(value)}}finally{try{await ub.end()}catch{}}})();
+try{for(;;){const{done:dn,value}=await rd.read();if(dn)break;if(value&&value.byteLength)await ub.put(value)}}finally{try{await ub.end()}catch(e){clean()}}})();
 upP.catch(clean);
 return new Response(ts.readable,{status:200,headers:hh})}
 // gRPC 入口：先嗅探首帧确认是否 gRPC 帧；是则上行剥帧 → 复用 xhF → 下行封帧；否则回退 xhF（保护 packet-up/raw）
@@ -2190,6 +2190,9 @@ export default {
       setUUID(_UUID);XH_PDH=_UUID.slice(1,7);XH_PDK="_"+_UUID.slice(25,31);
       const _WEB_PW = await getSafeEnv(env, 'WEB_PASSWORD', WEB_PASSWORD);
       const _SUB_PW = await getSafeEnv(env, 'SUB_PASSWORD', SUB_PASSWORD);
+      // P1-3：默认弱口令「告警不阻断」——命中默认值时面板横幅 + TG 一次性通知（绝不拒绝启动）
+      const _WEAK_PW = new Set(['abc', '123456', 'sub', 'password', 'admin']);
+      const _weakPw = _WEAK_PW.has(_WEB_PW) || _WEAK_PW.has(_SUB_PW);
       const _SUB_TOKEN = (await getSafeEnv(env, 'SUB_TOKEN', SUB_TOKEN) || '').trim();
       
       let _PROXY_IP = await getSafeEnv(env, 'PROXYIP', DEFAULT_PROXY_IP);
@@ -2258,13 +2261,18 @@ export default {
 
       // 📊 TG Webhook：/stats 命令查询 CF 用量（仅响应配置的 chat_id）
       if (url.pathname === '/tg/webhook' && r.method === 'POST') {
+        // P1-4：校验 Telegram secret_token（未配置 secret 时放行，平滑过渡）
+        const _tgs = await getSafeEnv(env, 'TG_WEBHOOK_SECRET', '');
+        if (_tgs && r.headers.get('X-Telegram-Bot-Api-Secret-Token') !== _tgs) return new Response('forbidden', { status: 403 });
+        // R4：未配置 secret 时告警（一次性；仍放行以免打断现网，收敛靠用户配置 TG_WEBHOOK_SECRET）
+        if (!_tgs) { try { if (!(await getSafeEnv(env, '_wh_secret_warned', ''))) { ctx.waitUntil(sendTgMsg(ctx, env, "⚠️ 安全告警：TG webhook 未配置 secret_token，建议在面板点「设置 Webhook」", r, "webhook 自检", true)); await _dashWrite(env, '_wh_secret_warned', '1'); } } catch (e) {} }
         try {
           const update = await r.json();
           const msg = update && (update.message || update.channel_post);
           const text = (msg && msg.text) || '';
           const fromChat = msg && msg.chat && msg.chat.id;
           const allowChat = (await getSafeEnv(env, 'STATS_CHAT_ID', '')) || (await getSafeEnv(env, 'TG_CHAT_ID', TG_CHAT_ID));
-          if (text.replace(/^\//, '').split(/[@\s]/)[0] === 'stats' && String(fromChat) === String(allowChat)) {
+          if (Number.isInteger(fromChat) && text.replace(/^\//, '').split(/[@\s]/)[0] === 'stats' && String(fromChat) === String(allowChat)) {
             ctx.waitUntil(replyStats(env, fromChat));
           }
         } catch (e) {}
@@ -2278,11 +2286,40 @@ export default {
       let isGlobalAdmin = await checkWhitelist(env, clientIP);
       let hasAuthCookie = false; 
 
+      // ===== P1-1 鉴权加固 helper（HMAC 会话 cookie + 恒定时间比较）=====
+      const _enc = new TextEncoder();
+      const _hex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      async function _hmacHex(secret, msg) {
+        const key = await crypto.subtle.importKey('raw', _enc.encode(String(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        return _hex(await crypto.subtle.sign('HMAC', key, _enc.encode(String(msg))));
+      }
+      function _ctEq(a, b) {
+        a = String(a || ''); b = String(b || '');
+        if (a.length !== b.length) return false;
+        let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+        return d === 0;
+      }
+      // R1：密钥优先 AUTH_SECRET；未配时生成 24B 随机并持久化（仅 D1 可用时），避免 HMAC 密钥=登录口令；均不可用时回退口令派生（兼容）
+      const _authSecret = async (env) => {
+        const cfg = await getSafeEnv(env, 'AUTH_SECRET', '');
+        if (cfg) return cfg;
+        let auto = await getSafeEnv(env, '_AUTH_SECRET_AUTO', '');
+        if (!auto && env.DB) {
+          try { auto = _hex(crypto.getRandomValues(new Uint8Array(24))); await _dashWrite(env, '_AUTH_SECRET_AUTO', auto); } catch (e) { auto = ''; }
+        }
+        return auto || _WEB_PW;
+      };
+
       if (_WEB_PW) {
-        const cookie = r.headers.get('Cookie') || "";
-        const regex = new RegExp(`(^|;\\s*)auth=${_WEB_PW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(;|$)`);
-        if (regex.test(cookie)) {
-            hasAuthCookie = true;
+        const m = /(?:^|;\s*)auth=([^;]+)/.exec(r.headers.get('Cookie') || '');
+        if (m) {
+          const v = m[1], dot = v.lastIndexOf('.');
+          const exp = Number(v.slice(0, dot)), sig = v.slice(dot + 1);
+          if (Number.isFinite(exp) && exp > Date.now()) {
+            const ua = r.headers.get('User-Agent') || '';
+            const expect = await _hmacHex(await _authSecret(env), `${ua}|${exp}`);
+            if (_ctEq(sig, expect)) hasAuthCookie = true;
+          }
         }
       }
 
@@ -2304,10 +2341,41 @@ export default {
       
       const flag = url.searchParams.get('flag');
       if (!flag && env.DB) ctx.waitUntil(incrementDailyStats(env));
+      // P1-1：服务端登录/登出（HMAC 会话 cookie，HttpOnly）
+      if (flag === 'login' && r.method === 'POST') {
+        // R3：IP 维度失败退避（isolate 级 best-effort，防在线暴破；60s 内 5 次失败→封 60s）
+        const _lf = (globalThis.__loginFail ||= new Map());
+        const _lk = clientIP || 'unknown', _now = Date.now();
+        const _lr = _lf.get(_lk);
+        if (_lr && _lr.until > _now) return new Response(JSON.stringify({ ok: false, msg: 'too many attempts' }), { status: 429, headers: { 'Content-Type': 'application/json' } });
+        const body = await parseJSONBody(r).catch(() => null);
+        const pw = String((body && body.pwd) || '');
+        if (!_ctEq(pw, _WEB_PW)) {
+          const c = (_lr && _now - _lr.t < 60000) ? _lr.c + 1 : 1;
+          _lf.set(_lk, { c, t: _now, until: c >= 5 ? _now + 60000 : 0 });
+          ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "登录失败(密码错误)", 30));
+          return new Response(JSON.stringify({ ok: false }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        _lf.delete(_lk);
+        const ua = r.headers.get('User-Agent') || '';
+        const exp = Date.now() + 86400000;
+        const sig = await _hmacHex(await _authSecret(env), `${ua}|${exp}`);
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': `auth=${exp}.${sig}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400`
+        } });
+      }
+      if (flag === 'logout' && r.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': 'auth=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'
+        } });
+      }
       if (flag) {
-          if (flag === 'github') { await sendTgMsg(ctx, env, "🌟 用户点击了烈火项目", r, "来源: 登录页面直达链接", isGlobalAdmin); return new Response(null, { status: 204 }); }
-          if (flag === 'log_proxy_check') { ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "检测ProxyIP", 30)); await sendTgMsg(ctx, env, "🔍 用户点击了 ProxyIP 检测", r, "来源: 后台管理面板", isGlobalAdmin); return new Response(null, { status: 204 }); }
-          if (flag === 'log_sub_test') { ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "订阅测试点击", 30)); await sendTgMsg(ctx, env, "🌟 用户点击了订阅测试", r, "来源: 后台管理面板", isGlobalAdmin); return new Response(null, { status: 204 }); }
+          // R6：github 全仓无调用方 → 补鉴权彻底收敛（原仅节流，保留登录页直达的收益已无意义）
+          if (flag === 'github') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "github点击", 30)); await sendTgMsg(ctx, env, "🌟 用户点击了烈火项目", r, "来源: 登录页面直达链接", isGlobalAdmin); return new Response(null, { status: 204 }); }
+          if (flag === 'log_proxy_check') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "检测ProxyIP", 30)); await sendTgMsg(ctx, env, "🔍 用户点击了 ProxyIP 检测", r, "来源: 后台管理面板", isGlobalAdmin); return new Response(null, { status: 204 }); }
+          if (flag === 'log_sub_test') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "订阅测试点击", 30)); await sendTgMsg(ctx, env, "🌟 用户点击了订阅测试", r, "来源: 后台管理面板", isGlobalAdmin); return new Response(null, { status: 204 }); }
           if (flag === 'stats') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const dateStr = new Date().toISOString().split('T')[0]; const reqCount = await getStoredDailyStats(env, dateStr); const cfStats = await getCloudflareUsage(env); const storageStatus = env.DB ? 'D1 OK' : 'Missing'; const reqLabel = storageStatus === 'Missing' ? 'Internal' : 'API'; const finalReq = storageStatus === 'Missing' ? '不统计' : (cfStats.success ? `${cfStats.total} (${reqLabel})` : `${reqCount} (${reqLabel})`); const cfConfigured = cfStats.success || (!!await getSafeEnv(env, 'CF_EMAIL', "") && !!await getSafeEnv(env, 'CF_KEY', "")); return new Response(JSON.stringify({ req: finalReq, ip: clientIP, loc: `${city}, ${country}`, storageStatus: storageStatus, cfConfigured: cfConfigured }), { headers: { 'Content-Type': 'application/json' } }); }
           if (flag === 'get_logs') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); let logs = []; if (env.DB) { try { const { results } = await env.DB.prepare("SELECT * FROM logs ORDER BY id DESC LIMIT 50").all(); logs = (results || []).map(normalizeLogEntry).filter(Boolean); } catch(e) {} } if (logs.length > 0) { return new Response(JSON.stringify({ type: 'd1', logs: logs }), { headers: { 'Content-Type': 'application/json' } }); } return new Response(JSON.stringify({ logs: "No Storage" }), { headers: { 'Content-Type': 'application/json' } }); }
           if (flag === 'get_whitelist') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const list = await getAllWhitelist(env); return new Response(JSON.stringify({ list }), { headers: { 'Content-Type': 'application/json' } }); }
@@ -2315,7 +2383,7 @@ export default {
           if (flag === 'del_whitelist' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await parseJSONBody(r); if(!body?.ip) return new Response(JSON.stringify({status:'error',msg:'Missing IP'}), {headers:{'Content-Type':'application/json'}}); const result = await delWhitelist(env, body.ip.trim()); return new Response(JSON.stringify(result.ok ? {status:'ok', ...result} : {status:'error', msg: result.errors.join(' | ') || 'No writable storage', ...result}), {headers:{'Content-Type':'application/json'}}); }
           if (flag === 'validate_tg' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await r.json(); await sendTgMsg(ctx, { TG_BOT_TOKEN: body.TG_BOT_TOKEN, TG_CHAT_ID: body.TG_CHAT_ID }, "🤖 TG 推送可用性验证", r, "配置有效", true); return new Response(JSON.stringify({success:true, msg:"验证消息已发送"}), {headers:{'Content-Type':'application/json'}}); }
           if (flag === 'validate_cf' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await r.json(); const res = await getCloudflareUsage(body); return new Response(JSON.stringify({success:res.success, msg: res.success ? `验证通过: 总请求 ${res.total}` : `验证失败: ${res.msg}`}), {headers:{'Content-Type':'application/json'}}); }
-          if (flag === 'set_webhook' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const token = await getSafeEnv(env, 'TG_BOT_TOKEN', TG_BOT_TOKEN); if (!token) return new Response(JSON.stringify({success:false, msg:'未配置 TG_BOT_TOKEN'}), {headers:{'Content-Type':'application/json'}}); const webhookUrl = `https://${url.hostname}/tg/webhook`; const wres = await tgApi(token, 'setWebhook', { url: webhookUrl, allowed_updates: ['message'] }); return new Response(JSON.stringify({success: !!(wres && wres.ok), msg: (wres && wres.ok) ? `Webhook 已设置: ${webhookUrl}` : ((wres && wres.description) || '设置失败')}), {headers:{'Content-Type':'application/json'}}); }
+          if (flag === 'set_webhook' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const token = await getSafeEnv(env, 'TG_BOT_TOKEN', TG_BOT_TOKEN); if (!token) return new Response(JSON.stringify({success:false, msg:'未配置 TG_BOT_TOKEN'}), {headers:{'Content-Type':'application/json'}}); const webhookUrl = `https://${url.hostname}/tg/webhook`; const secret = (await getSafeEnv(env, 'TG_WEBHOOK_SECRET', '')) || _hex(crypto.getRandomValues(new Uint8Array(24))); if (env.DB) { try { await env.DB.prepare("INSERT INTO config (key, value) VALUES ('TG_WEBHOOK_SECRET', ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(secret, secret).run(); cfgCacheReset(); } catch(e) {} } const wres = await tgApi(token, 'setWebhook', { url: webhookUrl, allowed_updates: ['message'], secret_token: secret }); return new Response(JSON.stringify({success: !!(wres && wres.ok), msg: (wres && wres.ok) ? (`Webhook 已设置: ${webhookUrl}` + (env.DB ? '' : '（警告：无 D1，secret 未持久化，校验将不生效）')) : ((wres && wres.description) || '设置失败')}), {headers:{'Content-Type':'application/json'}}); }
           if (flag === 'save_config' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); try { const body = await r.json(); const ALLOWED_KEYS = new Set(['ADD','ADDAPI','ADDCSV','ADDSUB','DLS','TG_BOT_TOKEN','TG_CHAT_ID','CF_ID','CF_TOKEN','CF_EMAIL','CF_KEY','PROXYIP','SUB_DOMAIN','SUBAPI','PS','LOGIN_PAGE_TITLE','DASHBOARD_TITLE','TG_GROUP_URL','SITE_URL','GITHUB_URL','PROXY_CHECK_URL','CLASH_CONFIG','SINGBOX_CONFIG_V11','SINGBOX_CONFIG_V12','WL_IP','ECH_ENABLED','ECH_SNI','ECH_DNS','STATS_ENABLED','STATS_CHAT_ID','CF_ZONE_ID']); for (const [k, v] of Object.entries(body)) { if (!ALLOWED_KEYS.has(k)) continue; if (env.DB) await env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(k, v, v).run(); } if (env.DB) cfgCacheReset(); return new Response(JSON.stringify({status: 'ok'}), { headers: { 'Content-Type': 'application/json' } }); } catch(e) { return new Response(JSON.stringify({status: 'error', msg: e.toString()}), { headers: { 'Content-Type': 'application/json' } }); } }
       }
 
@@ -2638,7 +2706,9 @@ export default {
         const _STATS_ENABLED = await getSafeEnv(env, 'STATS_ENABLED', 'false');
         const _STATS_CHAT_ID = await getSafeEnv(env, 'STATS_CHAT_ID', '');
         const _CF_ZONE = _maskVal(await getSafeEnv(env, 'CF_ZONE_ID', ''));
-        return new Response(dashPage(url.hostname, _UUID, _PROXY_IP, _SUB_PW, _SUB_DOMAIN, _CONVERTER, _SUB_TOKEN, env, clientIP, hasAuthCookie, tgState, cfState, _ADD, _ADDAPI, _ADDCSV, tgToken, tgId, cfId, cfToken, cfMail, cfKey, sysParams, _DASH_TITLE, _PROXY_CHECK_URL, _DLS, _ECH_ENABLED, _ECH_SNI_VAL, _ECH_DNS_VAL, _STATS_ENABLED, _STATS_CHAT_ID, _CF_ZONE, _ADDSUB), { status: 200, headers: noCacheHeaders });
+        // P1-3：弱口令 TG 一次性通知（持久化标记避免刷屏；DB 不可用时可能重复，属可接受）
+        if (_weakPw) { try { if (!(await getSafeEnv(env, '_weak_pw_notified', ''))) { ctx.waitUntil(sendTgMsg(ctx, env, "⚠️ 安全告警：仍在使用默认口令，请尽快修改 WEB_PASSWORD / SUB_PASSWORD", r, "启动自检", true)); await _dashWrite(env, '_weak_pw_notified', '1'); } } catch (e) {} }
+        return new Response(dashPage(url.hostname, _UUID, _PROXY_IP, _SUB_PW, _SUB_DOMAIN, _CONVERTER, _SUB_TOKEN, env, clientIP, hasAuthCookie, tgState, cfState, _ADD, _ADDAPI, _ADDCSV, tgToken, tgId, cfId, cfToken, cfMail, cfKey, sysParams, _DASH_TITLE, _PROXY_CHECK_URL, _DLS, _ECH_ENABLED, _ECH_SNI_VAL, _ECH_DNS_VAL, _STATS_ENABLED, _STATS_CHAT_ID, _CF_ZONE, _ADDSUB, _weakPw), { status: 200, headers: noCacheHeaders });
       }
       
 
@@ -3090,18 +3160,15 @@ function loginPage(tgGroup, siteUrl, githubUrl, pageTitle) {
             }
         }
         generateStars();
-        function verify(){
+        async function verify(){
             const p = document.getElementById("pwd").value;
             if(!p) return;
-            document.cookie = "auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-            document.cookie = "auth=" + p + "; path=/; SameSite=Lax; Secure";
-            sessionStorage.setItem("is_active", "1");
-            location.reload();
-        }
-        window.onload = function() {
-            if(!sessionStorage.getItem("is_active")) {
-                document.cookie = "auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-            }
+            try {
+                const res = await fetch('?flag=login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ pwd: p }) });
+                if(!res.ok){ alert('密码错误'); return; }
+                sessionStorage.setItem("is_active", "1");
+                location.reload();
+            } catch(e) { alert('登录失败，请重试'); }
         }
     </script>
 </body>
@@ -3109,8 +3176,10 @@ function loginPage(tgGroup, siteUrl, githubUrl, pageTitle) {
 }
 
 // 👇 修改：增加 proxyCheckUrl 参数
-function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, env, clientIP, hasAuth, tgState, cfState, add, addApi, addCsv, tgToken, tgId, cfId, cfToken, cfMail, cfKey, sysParams, dashTitle, proxyCheckUrl, dls, echEnabled, echSni, echDns, statsEnabled, statsChatId, zoneId, addSub) {
+function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, env, clientIP, hasAuth, tgState, cfState, add, addApi, addCsv, tgToken, tgId, cfId, cfToken, cfMail, cfKey, sysParams, dashTitle, proxyCheckUrl, dls, echEnabled, echSni, echDns, statsEnabled, statsChatId, zoneId, addSub, weakPw) {
     const defaultSubLink = `https://${host}/${subpass}`;
+    // P1-3：弱口令告警横幅（仅展示，绝不阻断）
+    const weakBanner = weakPw ? `<div style="position:relative;z-index:9999;padding:12px 16px;background:linear-gradient(90deg,#7f1d1d,#b91c1c);color:#fff;font-size:14px;text-align:center;font-weight:600;">⚠️ 安全告警：检测到仍在使用默认口令（WEB_PASSWORD / SUB_PASSWORD），请立即修改，否则面板与订阅可被任意访问。</div>` : '';
     const pathParam = proxyip ? "/proxyip=" + proxyip : "/";
     const linkParams = `${'enc'+'ryption'}=none&${'secu'+'rity'}=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}` : '');
     const regularLongLink = `https://${subdomain}/sub?uuid=${uuid}&${linkParams}`;
@@ -4744,6 +4813,7 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, 
     </style>
 </head>
 <body id="mainBody">
+    ${weakBanner}
     <!-- 玻璃碎裂背景 -->
     <div class="glass-shards-bg">
         <div class="shard"></div>
@@ -5157,8 +5227,7 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, 
         // 页面加载
         window.addEventListener('DOMContentLoaded', () => {
             if (HAS_AUTH && !sessionStorage.getItem("is_active")) {
-                document.cookie = "auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
-                window.location.reload();
+                fetch('?flag=logout', { method: 'POST' }).finally(() => window.location.reload());
             } else {
                 applyStoredTheme();
                 document.body.classList.add('loaded');
@@ -5545,9 +5614,8 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, 
         }
 
         function logout() {
-            document.cookie = "auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
             sessionStorage.removeItem("is_active");
-            location.reload();
+            fetch('?flag=logout', { method: 'POST' }).finally(() => location.reload());
         }
 
         // ==================== 网络信息检测功能 ====================

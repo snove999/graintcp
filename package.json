@@ -1,7 +1,8 @@
 {
   "scripts": {
     "predeploy": "node _predeploy_check.mjs",
-    "check": "node _predeploy_check.mjs"
+    "check": "node _predeploy_check.mjs",
+    "doccheck": "node _doccheck.mjs"
   },
   "dependencies": {
     "javascript-obfuscator": "^5.7.0",

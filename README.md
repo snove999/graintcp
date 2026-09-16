@@ -1,5 +1,15 @@
 # GrainTCP 双端代理（Workers + Snippets）
 
+<!-- doccheck:baseline
+harness_total=180
+file.worker.js.bytes=361753
+file.worker.js.sha256_12=a9aed13aeddb
+file.snippets.js.bytes=31463
+file.snippets.js.sha256_12=312c664da700
+file.worker.obf.js.bytes=861905
+file.worker.obf.js.sha256_12=572d32b515fd
+-->
+
 基于 [ToiCF/GrainTCP](https://github.com/ToiCF/GrainTCP) 内核与 [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) 生态兼容约定的 Cloudflare VLESS 代理，提供两个部署形态：
 
 | 文件 | 部署目标 | 定位 |
@@ -75,7 +85,8 @@ npm i -g wrangler
 wrangler d1 create graintcp          # 记下 database_id 填回配置
 wrangler d1 execute graintcp --file=schema.sql   # 上面第 2 步的四条建表语句存成 schema.sql
 wrangler secret put UUID
-node _predeploy_check.mjs   # 部署前预检（产物同源 / snippets ≤32KB / 产物存在），任一不过即拒绝部署
+node _predeploy_check.mjs   # 部署前预检（产物同源 / snippets ≤32KB / 产物存在 / 文档数据自查），任一不过即拒绝部署
+npm run doccheck            # 文档数据自查（文档声明值 vs 实际；上一行的 predeploy 已自动带跑）
 wrangler deploy
 ```
 
@@ -130,8 +141,8 @@ wrangler deploy
 
 `worker.obf.js` 由 javascript-obfuscator 生成：保留顶层导出与全部行为（`renameGlobals` 关闭），本地标识符十六进制化 + 字符串数组化；另含 rc4 字符串编码与控制流平坦化。
 
-- **`worker.obf.js`（850949B ≈ 831KB）——Workers 的部署件**：Dashboard 直接粘贴，或用 wrangler（`main` 已指向它）。Workers 无 32KB 限制，混淆不设防。
-- ⚠️ **混淆产物字节不可复现**：构建器启用了 `controlFlowFlattening` / `stringArrayRotate` / `stringArrayShuffle`，带随机性，**同一份源码每次构建的字节与体积都会漂移**（实测三次：845231B → 853000B → 850949B）。因此**不能用哈希判断"产物与源码是否一致"**；唯一有效的门禁是**行为等价**——把产物复制成 `worker.js`/`snippets.js` 放进临时目录，跑同一套回归，**0 容忍——白名单为空，任何红一律 `exit≠0`**。**每次构建后都必须重跑。**
+- **`worker.obf.js`（861905B ≈ 842KB）——Workers 的部署件**：Dashboard 直接粘贴，或用 wrangler（`main` 已指向它）。Workers 无 32KB 限制，混淆不设防。
+- ⚠️ **混淆产物字节不可复现**：构建器启用了 `controlFlowFlattening` / `stringArrayRotate` / `stringArrayShuffle`，带随机性，**同一份源码每次构建的字节与体积都会漂移**（实测三次：845231B → 853000B → 850949B）。因此**不能用哈希判断"产物与源码是否一致"**；唯一有效的门禁是**行为等价**——把产物复制成 `worker.js`/`snippets.js` 放进临时目录，跑同一套回归，**0 容忍——白名单为空，任何红一律 `exit≠0`**。**每次构建后都必须重跑。**<!-- doccheck:allow: 混淆产物漂移示例（历史实测三次值），刻意保留 -->
 - 明文/混淆交叉验证：`worker.obf.js` 通过同一套 **180 项**回归。
 
 ## 本地测试
