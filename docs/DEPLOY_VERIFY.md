@@ -1,7 +1,7 @@
 # GrainTCP 部署 · 线上验证 · 回滚手册
 
-> 适用版本：本次 xHTTP 下行断流（P0）与 `/proxyip=` 路径解析（P1）修复后
-> 项目根：`C:/Users/snove/.zcode/workspace/default/cf`
+> 适用版本：本次 xHTTP 下行断流（P0）、`/proxyip=` 路径解析（P1）、gRPC 帧编解码（P1-9）与 `XH_GDEC` O(n²) DoS 加固（G.2）修复后
+> 项目根：`C:/Users/snove/workbuddy-ai/GitHub Project/graintcp`
 > 双部署形态：**Workers**（`worker.js` / 线上跑 `worker.obf.js`）· **Snippets**（`snippets.js`，32KB 硬限额）
 > 手册定位：照做即可执行；每一步都给出**明确判定标准**与**失败时的下一步**。
 
@@ -14,7 +14,7 @@
 - 不安装/卸载软件，不改注册表、组策略、计划任务、系统代理、防火墙规则；
 - 不启停本机任何应用或服务；
 - 手册中的部署命令（`wrangler deploy` 等）**由你本人在需要时执行**，本文档只描述步骤，不代为执行；
-- 所有操作范围限定在项目目录 `C:/Users/snove/.zcode/workspace/default/cf` 与其子目录内；
+- 所有操作范围限定在项目目录 `C:/Users/snove/workbuddy-ai/GitHub Project/graintcp` 与其子目录内；
 - 唯一需要"联网"的动作是**只读探测**（`curl` 请求你自己的域名），不写入远端数据。
 
 **占位符约定**（下文统一使用，请自行替换）：
@@ -39,7 +39,7 @@
 
 > 📌 **本手册的定位**：只覆盖**部署、验证、回滚、排查**。xHTTP 实现层面的逐项差异审计
 > （`XH_HD` 该不该精简、`IdentityTransformStream` 与 `TransformStream` 的差异、握手扫描边界等）
-> 由 **Task #5「按官方文档与 EDT 的逐环境审计」** 负责，本手册**不预设其结论**，只提供部署侧可观测的判定手段。
+> 由**「按官方文档与 EDT 的逐环境审计」专项**负责，本手册**不预设其结论**，只提供部署侧可观测的判定手段。
 
 ---
 
@@ -49,14 +49,12 @@
 
 | 部署目标 | 应部署文件 | 大小（冻结基线实测） | 说明 |
 |---|---|---|---|
-| Workers | **`worker.obf.js`** | 818121B（≈799KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
-| Workers（排障临时） | `worker.js` | 341334B | 明文版，便于看堆栈；需改 `main` 才能部署 |
-| Snippets | **`snippets.js`**（明文） | 30433B（≈29.7KB） | ✅ **唯一可部署版本**（≤ 32768B） |
-| Snippets | `snippets.obf.js` | 39965B（≈39.0KB） | ❌ **不是部署件**：超 32768B 硬限额，仅作混淆参考 |
+| Workers | **`worker.obf.js`** | 850949B（≈831KB） | **线上实际跑的就是它**（`wrangler.jsonc` 的 `main` 指向它） |
+| Workers（排障临时） | `worker.js` | 355249B | 明文版，便于看堆栈；需改 `main` 才能部署 |
+| Snippets | **`snippets.js`**（明文） | 31286B（≈30.6KB） | ✅ **唯一可部署版本**（≤ 32768B） |
 
 > 🔴 **一句话记住产物对应关系**：**Workers 用 `worker.obf.js`；Snippets 必须贴明文 `snippets.js`**。
-> `snippets.obf.js`（39965B > 32768B）**在任何情况下都不是部署件** —— 混淆变换实测膨胀 **+9532B（≈+9.3KB）**，
-> 物理上无法同时满足"混淆"与"≤32KB"（除非砍功能）。
+> （`snippets.obf.js` 已废弃删除：它必然超 32KB、从来不是部署件，`_obfuscate.mjs` 也不再生成它。）
 >
 > 体积数字会随源码改动漂移，**一律以 `wc -c` 实测为准**；§1.3 给了自检式门禁命令。
 
@@ -70,34 +68,33 @@
 
 | 文件 | sha256（前 12 位） | 大小 |
 |---|---|---|
-| `worker.js`（明文，Workers 源） | `9ab1e855a293…` | — |
-| `snippets.js`（明文，**Snippets 部署件**） | `a1731f2f3dba…` | 30433B |
-| `worker.obf.js`（**Workers 部署件**） | `862b69e37b40…` | 818121B |
-| `snippets.obf.js` | — | 39965B（**非部署件**） |
-| `test_harness.mjs` | — | **151 项** |
+| `worker.js`（明文，Workers 源） | `513e011d6de9…` | — |
+| `snippets.js`（明文，**Snippets 部署件**） | `fc557e2d7fbc…` | 31286B |
+| `worker.obf.js`（**Workers 部署件**） | `62be6c787840…` | 850949B |
+| `test_harness.mjs` | — | **180 项** |
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 sha256sum worker.js snippets.js worker.obf.js | cut -c1-12
 ```
 
-**判定标准**：明文两项前缀对上 `9ab1e855a293` / `a1731f2f3dba`（确认"源码没被改过"）。
-`worker.obf.js` 的前缀 `862b69e37b40` **仅标识"仓库里提交的这一份"**，重建后会变 —— 见下方警告。
+**判定标准**：明文两项前缀对上 `513e011d6de9` / `fc557e2d7fbc`（确认"源码没被改过"）。
+`worker.obf.js` 的前缀 `62be6c787840` **仅标识"仓库里提交的这一份"**，重建后会变 —— 见下方警告。
 
 > ⚠️ **哈希的正确用法（务必分清，否则会误判）**
 > - **明文 `worker.js` / `snippets.js` 的哈希是权威且稳定的** —— 用来确认"这份源码没被改过"。
-> - **混淆产物 `worker.obf.js` 的哈希只用于标识"仓库里提交的这一份"**，**不能**用来判断"产物与源码是否一致"。`_obfuscate.mjs` 开了 `controlFlowFlattening(0.7)` / `stringArrayRotate` / `stringArrayShuffle`，**带随机性，字节与体积都不可复现**（同一份源码实测三次构建：`worker.obf.js` 809008B → 817408B → 818121B）。**合法重建后哈希变了是正常的，不要据此拒绝部署。**
+> - **混淆产物 `worker.obf.js` 的哈希只用于标识"仓库里提交的这一份"**，**不能**用来判断"产物与源码是否一致"。`_obfuscate.mjs` 开了 `controlFlowFlattening(0.7)` / `stringArrayRotate` / `stringArrayShuffle`，**带随机性，字节与体积都不可复现**（同一份源码实测三次构建：`worker.obf.js` 845231B → 853000B → 850949B）。**合法重建后哈希变了是正常的，不要据此拒绝部署。**
 > - 因此上面那句"对不上就别部署"**只适用于明文**。对混淆产物，唯一有效的门禁是**行为等价**：
 >   ```bash
->   # 把混淆产物当作明文塞进临时目录，跑同一套回归，看行为是否等价
->   cd C:/Users/snove/.zcode/workspace/default/cf
+>   # 把产物 + 明文部署件放进临时目录，跑同一套回归，看行为是否等价
+>   cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 >   mkdir -p .obfcheck && cp test_harness.mjs .obfcheck/
->   cp worker.obf.js   .obfcheck/worker.js        # 混淆产物 → 当 worker.js 用
->   cp snippets.obf.js .obfcheck/snippets.js      # 混淆产物 → 当 snippets.js 用
+>   cp worker.obf.js .obfcheck/worker.js          # 产物 → 当 worker.js 用（验行为等价）
+>   cp snippets.js   .obfcheck/snippets.js        # 明文部署件 → 必须复制，否则 harness 9 处 import 会崩
 >   ( cd .obfcheck && node test_harness.mjs | tail -n 3 ); rm -rf .obfcheck
 >   ```
->   **期望：151 项里恰好只有 1 项红 —— 即「`snippets.js` 体积 ≤ 32768 字节」这条**（因为你把 39965B 的
->   `snippets.obf.js` 放在了 `snippets.js` 的位置上，它本就该超限）。**其余 150 项必须全绿**，
+>   **期望：180 项全绿、0 失败**（`snippets.obf.js` 已删除，不再有「体积 > 32768」这条预期红；
+>   门禁白名单为空、**0 容忍**，任何红一律 `exit≠0`）。
 >   这才能证明"混淆产物与明文行为等价"。**每次重新构建后都要重跑。**
 
 ### 1.2 备份旧产物（回滚的物理前提）
@@ -105,7 +102,7 @@ sha256sum worker.js snippets.js worker.obf.js | cut -c1-12
 在**修改或重新混淆之前**，先做带时间戳的备份。这是回滚唯一的凭据。
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 STAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p docs/backup/$STAMP
 cp worker.obf.js   docs/backup/$STAMP/
@@ -127,25 +124,30 @@ cd docs/backup/$STAMP && sha256sum -c SHA256SUMS.txt   # 期望：3 行全部 OK
 ### 1.3 重新生成混淆版（改了 `worker.js` 之后）
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 node _obfuscate.mjs
 ```
 
-**判定标准**：脚本输出两行体积对比，`worker.obf.js` 生成成功且**体积在 300KB~1.5MB 区间**（明显偏离说明混淆配置被改坏）。随后**必须**跑一次回归：
+**判定标准**：脚本输出一行体积对比，`worker.obf.js` 生成成功且**体积在 300KB~1.5MB 区间**（明显偏离说明混淆配置被改坏）。随后**必须**跑一次回归：
 
 ```bash
-node test_harness.mjs      # 期望：151 项、0 失败
+node test_harness.mjs      # 期望：180 项、0 失败
 
-# --- 红绿对照：对修复前的旧代码跑同一套回归（期望 35/151 失败）---
+# --- 红绿对照：证明这套用例不是"空洞全绿" ---
 # 关键：test_harness.mjs 的 DIR = 它自己所在目录，所以把 harness 与旧文件
 #       一起放进临时目录即可，**完全不必改动工作区里的任何源码**。
-cd C:/Users/snove/.zcode/workspace/default/cf
+# ⚠️ 修复前的提交 1496ffb 早于 gRPC 功能（P1-9）；当前 180 项 harness 的导出清单
+#    硬依赖 gRPC 符号（XH_GCHK/XH_GFR/XH_GDEC/XH_isGrpc/XH_pdFeat），1496ffb 无这些
+#    符号 → 在其上跑当前 harness 会在**导入阶段 SyntaxError**、无法产出结果。
+#    因此红基线只能在**当时的 152 项口径**下复现：实测 1496ffb 在其可运行的 152 项
+#    中 **36 项失败**（5 类缺陷），证明用例确实能测出缺陷（非空洞）。
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 mkdir -p .redcheck && cp test_harness.mjs .redcheck/
-git show HEAD:worker.js   > .redcheck/worker.js      # 修复前的 worker
-git show HEAD:snippets.js > .redcheck/snippets.js    # 修复前的 snippets
-( cd .redcheck && node test_harness.mjs | tail -n 3 )   # 期望：共 151 项，失败 35 项
+git show 1496ffb:worker.js   > .redcheck/worker.js      # 修复前的 worker（1496ffb = 修复提交 b8f5846 的父提交）
+git show 1496ffb:snippets.js > .redcheck/snippets.js    # 修复前的 snippets（同上）
+( cd .redcheck && node test_harness.mjs | tail -n 3 )   # ⚠️ 当前 180 项 harness 在此会 SyntaxError（见上）
 rm -rf .redcheck
-# 说明：35/151 红 → 0/151 绿，才是"修复真实生效"的证据链；
+# 说明：36 项红 → 0 项绿，才是"修复真实生效"的证据链；
 #       只跑绿的不跑红的，无法排除"测试本身就测不到"的可能。
 
 # Snippets 体积门禁：>32768 直接拒绝部署（防"改了源码顺手重新混淆、把超限产物当部署物"）
@@ -155,9 +157,9 @@ if [ "$S" -le 32768 ]; then echo "PASS $SNIP=$S ≤ 32768，可部署";
 else echo "FAIL $SNIP=$S > 32768（Cloudflare Snippets 硬限额），拒绝部署"; exit 1; fi
 ```
 
-> `snippets.obf.js` 会同步被重新生成，但它**始终超限、始终不是部署件**——忽略即可。
-> **不需要**给它的体积断言加 skip：那是自建审查夹具的假阳性，已撤销该建议；`test_harness.mjs` 全文不含 `snippets.obf.js` 体积断言。
-> （harness 里那条体积断言针对的是**部署件 `snippets.js`**，当前 30433B ≤ 32768，通过。）
+> `snippets.obf.js` 已废弃删除（`_obfuscate.mjs` 不再生成它）——它必然超 32KB、从来不是部署件。
+> `test_harness.mjs` 全文不含 `snippets.obf.js` 体积断言（该断言针对的是**部署件 `snippets.js`**）。
+> （harness 里那条体积断言针对的是**部署件 `snippets.js`**，当前 31286B ≤ 32768，通过。）
 
 ---
 
@@ -168,7 +170,7 @@ else echo "FAIL $SNIP=$S > 32768（Cloudflare Snippets 硬限额），拒绝部�
 **一次性准备**（仅首次需要）：
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 npm i -g wrangler
 wrangler login                       # 浏览器授权 Cloudflare 账号
 wrangler d1 create graintcp          # 输出里记下 database_id
@@ -195,21 +197,22 @@ wrangler secret put UUID             # 粘贴 {UUID}
 **每次发布**：
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 node _obfuscate.mjs        # 保证 worker.obf.js 与 worker.js 同源（见 1.3）
+node _predeploy_check.mjs  # 部署前独立预检（产物同源 / snippets ≤32KB / 产物存在），任一不过即拒绝部署（等价 `npm run predeploy`）
 wrangler deploy            # 打包并发布 main 指向的文件
 wrangler deployments list  # 记下本次 Version ID，回滚要用
 ```
 
 **判定标准**：
-- `wrangler deploy` 输出 `Uploaded <name>` + `Deployed <name> triggers`，且打印的 **Upload 体积 ≈ 818KB**（若只有 300 多 KB，说明部署的是明文版，`main` 被改过）；
+- `wrangler deploy` 输出 `Uploaded <name>` + `Deployed <name> triggers`，且打印的 **Upload 体积 ≈ 831KB**（若只有 300 多 KB，说明部署的是明文版，`main` 被改过）；
 - `wrangler deployments list` 首行是刚刚的 Version ID，时间戳为当前时间。
 
 ### 2.2 路径 B：Dashboard（新手友好，无本地工具链）
 
 1. **Workers & Pages → Create → Worker**（或进入已有 Worker → **Edit code**）。
 2. **全量粘贴 `worker.obf.js` 全文**（不是 `worker.js`，除非你刻意要明文版），**Deploy**。
-   - 混淆版约 79 万字符，粘贴时**务必等编辑器完全响应再点 Deploy**；大文件粘贴不完整是"部署成功但行为诡异"的常见来源。
+   - 混淆版约 85 万字符，粘贴时**务必等编辑器完全响应再点 Deploy**；大文件粘贴不完整是"部署成功但行为诡异"的常见来源。
 3. **绑定 D1**：Storage & Databases → D1 → 建库 `graintcp` → 回到 Worker → **Settings → Bindings → Add → D1 Database**，**变量名必须填 `DB`**（大小写敏感，写错等于没绑）。
 4. **初始化表结构**：D1 → Console，粘贴 `schema.sql` 全文执行。
 5. **环境变量**：Worker → **Settings → Variables and Secrets**。
@@ -260,22 +263,21 @@ D1 `config` 表（面板「保存配置」写入，键名与环境变量同名�
 | 项 | 要求 | 判定 |
 |---|---|---|
 | 计划 | **付费计划**（Free 无 Snippets 功能） | Dashboard 能看到 Rules → Snippets 入口 |
-| 体积 | **≤ 32768 字节（硬限额）** | `wc -c snippets.js` → 冻结基线实测 30433 字节（≈29.7KB）✅ |
+| 体积 | **≤ 32768 字节（硬限额）** | `wc -c snippets.js` → 冻结基线实测 31286 字节（≈30.6KB）✅ |
 | CPU | 5ms/请求 | 轻量形态，勿加面板类重逻辑 |
-| 混淆版 | `snippets.obf.js` 冻结基线实测 39965 字节（≈39.0KB） | ❌ **不是部署件**：超限，仅作混淆参考（`_obfuscate.mjs` 注释亦标明"混淆参考版"） |
 
 ```bash
-wc -c C:/Users/snove/.zcode/workspace/default/cf/snippets.js      # 必须 ≤ 32768
+wc -c C:/Users/snove/workbuddy-ai/GitHub Project/graintcp/snippets.js      # 必须 ≤ 32768
 
 # 体积门禁（>32768 直接拒绝，防止把超限产物当部署物）
-S=$(wc -c < C:/Users/snove/.zcode/workspace/default/cf/snippets.js)
+S=$(wc -c < C:/Users/snove/workbuddy-ai/GitHub Project/graintcp/snippets.js)
 [ "$S" -le 32768 ] && echo "PASS $S" || { echo "FAIL $S > 32768，拒绝部署"; exit 1; }
 ```
 
 ### 3.2 部署步骤
 
 1. Dashboard → **Rules → Snippets → Create Snippet**。
-2. **粘贴 `snippets.js` 全文**（明文版；`snippets.obf.js` 会因超限被平台拒绝）。
+2. **粘贴 `snippets.js` 全文**（明文版；本项目不再生成混淆版 snippets 产物）。
 3. **绑定 hostname**：规则形如 `*.{你的域}/*`（或精确 host，如 `{HOST}/*`）。
    - ⚠️ **Snippets 只对"经过 Cloudflare 代理（橙云）的 hostname"生效**；DNS 记录为灰云（DNS only）的域名，Snippets 不会执行 → 现象是"规则配了但完全没反应"。
    - 一个 hostname 同时命中 Worker 路由与 Snippet 时，**两者都会执行**，行为叠加难以推理；排障期建议一个域名只挂一种形态。
@@ -285,26 +287,26 @@ S=$(wc -c < C:/Users/snove/.zcode/workspace/default/cf/snippets.js)
 
 #### 3.2.1 ⭐ 粘贴保真校验（Snippets 独有的真实风险）
 
-`snippets.js` **不是单行文件**：共 **48 行**，其中压缩块**最长行 11998 字符**。实测无 CR、无 BOM、无控制字符（除 `\n`/`\t`），以单个 LF 结尾，末字符为 `}`，含中文注释（合法非 ASCII）。
+`snippets.js` **不是单行文件**：共 **60 行**，其中压缩块**最长行 11627 字符**。实测无 CR、无 BOM、无控制字符（除 `\n`/`\t`），以单个 LF 结尾，末字符为 `}`，含中文注释（合法非 ASCII）。
 
 **真实风险是"超长行被编辑器回折/截断"和"智能引号替换"（`"` → `“ ”`），不是字符级损坏。** 粘贴后**必须回读校验**：
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 S=$(wc -c < snippets.js)
-echo "长度=$S（基准 30433）"
+echo "长度=$S（基准 31286）"
 head -c 60 snippets.js; echo "   <- 首 60 字符（基准见下）"
 tail -c 2 snippets.js | cat -A              # 基准：} 后接 $（即以 LF 结尾）
-sha256sum snippets.js | cut -c1-12          # 基准：a1731f2f3dba
+sha256sum snippets.js | cut -c1-12          # 基准：fc557e2d7fbc
 ```
 
 | 校验项 | 基准值 |
 |---|---|
-| 长度 | **30433** 字节 |
-| sha256（前 12 位） | **`a1731f2f3dba`** |
+| 长度 | **31286** 字节 |
+| sha256（前 12 位） | **`fc557e2d7fbc`** |
 | 首 60 字符 | `const UUID="d675a8ea-61bc-4db9-a8a6-109ca1ec8385",SUB_PWD="s` |
 | 末字符 | `}`（文件以 LF 结尾） |
-| 行数 / 最长行 | 48 行 / 11998 字符 |
+| 行数 / 最长行 | 60 行 / 11627 字符 |
 
 > ⚠️ 上述长度与哈希是**当前冻结版**的值。**若后续再改动源码，这组基准必须同步更新**（体积会变）。
 
@@ -318,7 +320,7 @@ Snippets 没有环境变量，所有配置**硬编码在文件头部**，改完�
 // 第 1 行：UUID / SUB_PWD（订阅密码路径）/ ADF（推广行过滤正则）
 const UUID="...",SUB_PWD="sub",ADF=/telegram|t\.me|premium/i;
 // 第 2–7 行：出口与订阅参数
-let PIP="ProxyIP.US.cmliussss.net";       // 默认 ProxyIP，支持 `域名!txt` TXT 池（Snippets 独有）
+let PIP="Pro"+"xyIP."+"CM"+"Liussss.net";       // 默认 ProxyIP，支持 `域名!txt` TXT 池（Snippets 独有）
 let SUB="https://sub.xdu.qzz.io/";        // 优选订阅生成器
 let SUBAPI="https://subapi.cmliussss.net";
 let SUBINI="https://raw.githubusercontent.com/.../ACL4SSR_Online_Full_MultiMode.ini";
@@ -326,20 +328,20 @@ const SBV11="https://raw.githubusercontent.com/.../1.11.x/sing-box.json";
 const SBV12="https://raw.githubusercontent.com/.../1.12.x/sing-box.json";
 ```
 
-> 注意源码里字符串被拆成 `"Pro"+"xyIP.US."+"cm"+"liussss.net"` 这类拼接形式——这是作者刻意的抗静态扫描写法，**改配置时改整段拼接结果即可，不要把拼接拆坏**。
+> 注意源码里字符串被拆成 `"Pro"+"xyIP."+"CM"+"Liussss.net"` 这类拼接形式——这是作者刻意的抗静态扫描写法，**改配置时改整段拼接结果即可，不要把拼接拆坏**。
 
 **判定标准**：改 `SUB_PWD` 后保存，旧路径 `/{旧密码}` 返回非 200、新路径 `/{新密码}` 返回 200。
 
 ### 3.4 环境约束差异（决定你该选哪种形态）
 
 **Workers 与 Snippets 是两个不同的运行环境，能力上限不同，禁止把两者当成"同一份代码换个地方跑"。**
-下表只列**部署侧可观测的硬约束**（官方文档口径）；xHTTP 实现层面的逐项差异属 Task #5 的审计范围，本手册不预设结论。
+下表只列**部署侧可观测的硬约束**（官方文档口径）；xHTTP 实现层面的逐项差异属该**逐环境审计专项**的范围，本手册不预设结论。
 
 | 维度 | Workers | Snippets |
 |---|---|---|
 | 执行时间 | 无 5ms 级限制 | **5ms / 请求** |
 | 内存 | 宽松 | **2MB** |
-| 脚本/包体 | 单脚本限额宽松（`worker.obf.js` 818121B 可部署） | **32KB 硬限额**（`snippets.js` 30433B ✅） |
+| 脚本/包体 | 单脚本限额宽松（`worker.obf.js` 850949B 可部署） | **32KB 硬限额**（`snippets.js` 31286B ✅） |
 | 出站 subrequest 数 | 宽松 | **Pro 2 / Business 3 / Enterprise 5** ⚠️ 关键瓶颈 |
 | 持久化 | **有 D1**（绑定名 `DB`）+ `config`/`whitelist`/`logs`/`stats` | **无 D1** |
 | 管理面板 | 有（`/{SUB_PASSWORD}` 登录、`flag=` 系列） | **无面板** |
@@ -376,7 +378,7 @@ const SBV12="https://raw.githubusercontent.com/.../1.12.x/sing-box.json";
 L7 是**修复前的线上实测证据**（只读，供理解根因），L6 为待确认项。
 
 - **只想知道"修好没有"**：直接跑 **L8**（一条命令、两个断言，同时覆盖 P0 与 P1）。
-- **要完整交付**：跑 L0 → L8，并核对 L5 的 **151 项 0 失败** 与 **35/151 红基线**。
+- **要完整交付**：跑 L0 → L8，并核对 L5 的 **180 项 0 失败** 与 **36 项红基线**。
 - **L2 是 P0 的判定点，不通过就等于修复失败**，后面不用看。
 
 ### L0 基础可达性 `[curl 可判定]`
@@ -457,7 +459,7 @@ echo '--- body ---'; cat /tmp/xh_body.txt; echo
 所以：**收到 `00 00` 之后的 HTTP 文本 = 下行已恢复；只收到 `00 00` 然后挂死 = 下行仍断流。**
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 
 # 1) 构造 VLESS 帧：UUID 换成你的 {UUID}（此处示例为 d675a8ea-…）
 #    \x00 + UUID16 + \x00 + \x01 + \x00\x50(端口80) + \x02(域名) + \x0b(长度11) + "example.com"
@@ -570,7 +572,7 @@ curl 从外部无法把它区分开。**所以 P1 没有可靠的 curl-only 判�
 **方式 B：离线 harness（最可靠、可重复）**
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 node test_harness.mjs     # 重点看「路径语法矩阵」「addrParser」两组是否全绿
 ```
 
@@ -599,20 +601,20 @@ node test_harness.mjs     # 重点看「路径语法矩阵」「addrParser」两
 ### L5 离线回归 `[离线 harness]`
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
-node test_harness.mjs        # 期望：151 项、0 失败
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
+node test_harness.mjs        # 期望：180 项、0 失败
 ```
 
-**判定标准**：**151 项、0 失败**，尤其关注 `xHTTP 双端全链路`、`路径语法矩阵`、`addrParser` 三组。任一项红 → **不要部署**，退回 fullstack-engineer。
+**判定标准**：**180 项、0 失败**，尤其关注 `xHTTP 双端全链路`、`gRPC 编解码`、`路径语法矩阵`、`addrParser` 四组。任一项红 → **不要部署**，退回 fullstack-engineer。
 
-**红绿对照（权威数字，必看）**：对**修复前**的代码（`git show HEAD:worker.js` / `git show HEAD:snippets.js`）跑同一套回归，结果是 **35 / 151 失败**。
+**红绿对照（权威数字，必看）**：对**修复前**的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑回归，实测 **36 项失败**（该提交早于 gRPC 功能，当前 180 项 harness 的导出清单依赖其不存在的符号，无法在其上完整运行；36 为其可运行项中的失败数）。
 
 | 被测代码 | 结果 | 含义 |
 |---|---|---|
-| 修复前（`HEAD`） | **35 / 151 失败** | 红基线 —— 证明这套测试**确实能测出这些缺陷** |
-| 修复后（冻结基线） | **0 / 151 失败** | 绿 —— 证明缺陷已被消除 |
+| 修复前（`1496ffb`） | **36 项失败** | 红基线 —— 证明这套测试**确实能测出这些缺陷** |
+| 修复后（冻结基线） | **0 / 180 失败** | 绿 —— 证明缺陷已被消除 |
 
-**35 项红分别落在 4 类缺陷上**（可用于确认"测试打中的就是我们要修的东西"）：
+**36 项红分别落在 5 类缺陷上**（可用于确认"测试打中的就是我们要修的东西"）：
 
 | 缺陷 | 红项数 | 代表失败用例 |
 |---|---|---|
@@ -620,12 +622,13 @@ node test_harness.mjs        # 期望：151 项、0 失败
 | **%3F 预解码非法编码**（未捕获 ⇒ 500） | 12 | `worker xhF 入口 "%3F+非法编码 x%3F%zz"：正常放行 200 不崩溃`（worker/snippets × ws/xhF × 3 种非法编码） |
 | **XH_HS 域长越界**（`n==o+3` 读 `b[o+3]` 越界 ⇒ 误 400） | 4 | `worker XH_HS 域帧切片=o+3 → 1（等待更多，不得 -1）` |
 | **P0** 下行断流 | 2 | `worker xHTTP 下行：远端数据回传客户端`、`worker xHTTP 下行：远端 socket 未被关闭` |
-| **合计** | **35** | |
+| **snippets 无 `!txt` 直连**（`snippets` 侧新增用例） | 1 | `snippets /proxyip=域名（无 !txt）：预算内直接 connect 主机名` |
+| **合计** | **36** | |
 
 > 🔑 **只跑绿的不跑红的，证据链是不完整的**：如果测试本身就测不到该缺陷，它也会"全绿"。
-> **35/151 → 0/151 的对照才是"修复真实生效"的证明**。这也是本手册不再给任何断言留"预期失败"豁免的原因。
+> **36 项红 → 0 项绿的对照才是"修复真实生效"的证明**。这也是本手册不再给任何断言留"预期失败"豁免的原因。
 
-> ✅ **没有豁免项**：harness 全文**不含** `snippets.obf.js` 体积断言（曾出现的"obf 体积失败"是自建审查夹具的假阳性，已撤销该建议）。
+> ✅ **没有豁免项**：harness 全文**不含** `snippets.obf.js` 体积断言（该文件已废弃删除）。
 > 所以"0 失败"就是字面意义的 0 失败，**不要给自己留任何"这条红是预期的"空间** —— 那正是掩盖真红的第一步。
 >
 > ⚠️ **离线全绿 ≠ 线上可用**：harness 跑在 **Node/undici** 上，**未建模 workerd 边缘的行为**（尤其是头处理与 URL 预解码环境）。
@@ -648,7 +651,7 @@ node test_harness.mjs        # 期望：151 项、0 失败
   `getAll()` / `Set-Cookie` 折叠 / `USVString`；按 Fetch 规范 forbidden **response**-header name 只有
   `Set-Cookie` / `Set-Cookie2`，`Connection` 属 forbidden **request**-header name，对 Response 不适用），
   且已被上面的实测直接否定；
-- quality-security-expert 的 Task #3 结论（`new Headers(XH_HD)` **无需改动，低风险**）与实测一致。
+- quality-security-expert 的**安全复核结论**（`new Headers(XH_HD)` **无需改动，低风险**）与实测一致。
 
 > 原"待确认"状态**予以关闭**。§7 分支 F 中关于该头的部分随之降级为**排查用假设**（见下）。
 
@@ -657,7 +660,7 @@ node test_harness.mjs        # 期望：151 项、0 失败
 | 项 | 现状 | 收口动作 |
 |---|---|---|
 | Snippets 侧 **subrequest 预算**（Pro 2 / Business 3 / Ent 5）是否被 `/proxyip=` 的 DoH 组合打爆（§3.4） | 未在真实计划上实测；**用户实测 WS 可用**，故不能断言现状已超限 | 用真实计划的 staging 跑一次 `/proxyip=` 路径，观察是否出现 subrequest 超限错误；若有，再决定是否做**仅 Snippets 的**降级（不得反向施加到 Workers） |
-| `worker.obf.js` 体积 818121B 距 Workers 单脚本限额的余量 | 未超限，可部署 | 每次重新混淆后确认体积未出现异常跳变（> 1.5MB 需排查混淆配置） |
+| `worker.obf.js` 体积 850949B 距 Workers 单脚本限额的余量 | 未超限，可部署 | 每次重新混淆后确认体积未出现异常跳变（> 1.5MB 需排查混淆配置） |
 
 > 标注原则：**未在真实运行时验证过的结论不写成"已验证"**。L6.2 两项为开放项，请勿在交付说明中表述为已通过。
 
@@ -708,7 +711,7 @@ node test_harness.mjs        # 期望：151 项、0 失败
 
 > ✅ **已有现成脚本，优先直接用它**：`docs/post_deploy_accept.sh`（本手册同目录，零凭据、只读、无副作用）。
 > ```bash
-> cd C:/Users/snove/.zcode/workspace/default/cf
+> cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 > bash docs/post_deploy_accept.sh
 > ```
 > 它做的事与本节完全一致：构造同一个 90 字节 VLESS 首包 → 对 **`xtgm.snove999.eu.org`（Workers）** 与
@@ -852,12 +855,12 @@ done
 **方式二：本地备份回滚（Dashboard 版本已不可用时）**
 
 ```bash
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 STAMP=<你要回滚到的备份时间戳>
 cp docs/backup/$STAMP/worker.obf.js   worker.obf.js
 cp docs/backup/$STAMP/wrangler.jsonc  wrangler.jsonc
 cd docs/backup/$STAMP && sha256sum -c SHA256SUMS.txt   # 期望全部 OK
-cd C:/Users/snove/.zcode/workspace/default/cf
+cd C:/Users/snove/workbuddy-ai/GitHub Project/graintcp
 wrangler deploy
 ```
 
@@ -865,7 +868,7 @@ wrangler deploy
 混淆器带随机性，见 §1.1.1 的说明）；随后按 **L0 → L2 → L8** 复测通过。
 
 > ⚠️ **回滚也要验行为，不能只看体积**：体积对不上不代表回滚失败（混淆产物不可复现），
-> 但**行为必须对上** —— 跑 `node test_harness.mjs`（151 项 0 失败）与 **L8** 验收协议。
+> 但**行为必须对上** —— 跑 `node test_harness.mjs`（180 项 0 失败）与 **L8** 验收协议。
 
 **方式三：临时切明文版定位（不是回滚，是排障）**
 
@@ -911,10 +914,6 @@ Snippets 无版本历史，**只能靠备份文本**：
 │     [curl 可判定]  L2.2 → body 只有 `00 00`、curl_exit=28 超时 ⇒ ★直接命中下行断流
 │     [已确证]       L7.1 线上实测：两端均「200 + 恰好 2 字节 [0,0]，之后无字节」
 │                     ⇒ 这就是"能握手、打不开网页"的精确形态（修复前的实测事实）
-│     [离线 harness] node _probe_downlink.mjs
-│                     · 下行数据回传 = ❌ 未收到 / 超时无数据
-│                     · 远端 socket 是否被关闭 = ❌ 已关闭（drop 触发）
-│                     ⇒ 三重命中即确诊：ts.writable 被重复 pipeTo 抢锁 → drop() 关远端
 │   根因：worker.js 中 xhF 在同一同步任务内对 ts.writable 发起了两次 pipeTo
 │         （先 start() 里 enqueue [0,0] 的那次，再 rm.readable.pipeTo(ts.writable)），
 │         按 Streams 规范第二次必然抢锁失败 → 走 .then(drop, drop) 的失败分支 → 关远端 socket。
@@ -979,10 +978,10 @@ Snippets 无版本历史，**只能靠备份文本**：
     ★★ 关键第一步：**500 必须与请求 URL 形状关联，有两类互不相干的 500** ——
        F1【URL 解码类】✅ **已确证且已在冻结基线中修复**
           URL 含 `%3F` + 非法转义（如 `/x%3F%zz`）⇒ 命中 `%3F` 预解码路径
-          （`worker.js:1511` / `1986` 附近，该处 decodeURIComponent **未包 try**）⇒ 500。
+          （`worker.js:1623` / `2134` 附近；**修复前**该处 `decodeURIComponent` **未包 try** ⇒ 抛错 500；修复后已包 `try` 安全降级）。
           **证据**：红基线里 **12 项**失败全部属此类 —— worker/snippets × ws/xhF 入口 × 3 种非法编码
           （`%`、`%zz`、`%E0%A4%A`），期望"正常放行不崩溃"但旧代码抛错。
-          修复后这 12 项转绿（`node test_harness.mjs` → 151 项 0 失败）。
+          修复后这 12 项转绿（`node test_harness.mjs` → 180 项 0 失败）。
           判据：**把 URL 换成不含 `%3F` 的普通 path（如 `/xh`）重测；若 500 消失 ⇒ 属 F1。**
        F2【响应头类】❌ **假设已被实测否定**（见下方）
           普通 path 下仍 500 ⇒ 原本怀疑 `new Headers(XH_HD)`；但线上探针已证明
@@ -1019,13 +1018,13 @@ Snippets 无版本历史，**只能靠备份文本**：
 | 检查 | 命令要点 | 通过标准 |
 |---|---|---|
 | 备份就绪 | `sha256sum -c docs/backup/<STAMP>/SHA256SUMS.txt` | 全部 OK |
-| 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `9ab1e855a293`/`a1731f2f3dba`/`862b69e37b40` |
-| 部署的是修复版 | `wrangler deploy` 输出的 Upload 体积 | ≈818KB（≈818121B，混淆版；明文版只有 300 多 KB） |
-| 混淆与源码同源 | 把产物复制成 `worker.js`/`snippets.js` 放临时目录后跑同一套 harness | **151 项里只有「`snippets.obf.js` 体积 > 32768」这 1 项红**（**其余无豁免项**） |
-| 断言未被静默跳过 | 产物保留顶层名（`renameGlobals:false` + terser `toplevel:false`），故 `export { XH_HS }` 追加有效 | `XH_HS 域帧切片` 6 条在产物里**真跑且全绿**（`o+3→1`、`o+3+l→1`、`o+4+l→0`，两端各 3 条），**不是 skipped** |
-| 红绿对照 | 对 `HEAD` 旧代码跑同一套回归 | **35/151 失败**（证明测试确实能测出缺陷） |
+| 冻结基线核对 | `sha256sum worker.js snippets.js worker.obf.js` | 前缀 `513e011d6de9`/`fc557e2d7fbc`/`62be6c787840` |
+| 部署的是修复版 | `wrangler deploy` 输出的 Upload 体积 | ≈831KB（≈850949B，混淆版；明文版只有 300 多 KB） |
+| 混淆与源码同源 | 把产物复制成 `worker.js`、明文 `snippets.js` 放临时目录后跑同一套 harness | **180 项全绿、0 失败**（白名单为空、**0 容忍**，任何红一律 `exit≠0`） |
+| 断言未被静默跳过 | 产物保留顶层名（`renameGlobals:false`），故 `export { XH_HS }` 追加有效 | `XH_HS 域帧切片` 6 条在产物里**真跑且全绿**（`o+3→1`、`o+3+l→1`、`o+4+l→0`，两端各 3 条），**不是 skipped** |
+| 红绿对照 | 对 `1496ffb` 旧代码跑回归 | **36 项失败**（`1496ffb` 早于 gRPC，180 项 harness 无法在其上完整运行；证明测试确实能测出缺陷） |
 | 离线≠线上 | — | L5 全绿**不能**替代 L2 / L7 / L8 |
-| Snippets 体积门禁 | `wc -c snippets.js` ≤ 32768 | PASS（冻结基线 30433B） |
+| Snippets 体积门禁 | `wc -c snippets.js` ≤ 32768 | PASS（冻结基线 31286B） |
 | 边缘可达 | `curl /version?uuid={UUID}` | 200 + `Version:2142` |
 | 订阅可达 | `curl /sub?uuid={UUID}` | 200 + 体积 > 0 |
 | 面板可达 | `curl /{SUB_PASSWORD}` | 200 + HTML |
@@ -1048,7 +1047,7 @@ Snippets 无版本历史，**只能靠备份文本**：
 - 本手册**只做只读分析与文档产出**，未修改 `worker.js` / `snippets.js` / `test_harness.mjs` 等任何源码。
 - 本手册**不要求、也不建议改动用户本机系统**：不装软件、不改注册表/计划任务/系统代理、不启停本机应用。
 - 手册中的 `wrangler deploy` 等**变更类命令由用户本人按需执行**，本文档不代为执行，也未实际部署。
-- 所有路径引用均限定在 `C:/Users/snove/.zcode/workspace/default/cf` 内。
+- 所有路径引用均限定在 `C:/Users/snove/workbuddy-ai/GitHub Project/graintcp` 内。
 - 安全加固相关内容需与 quality-security-expert 复核后方可作为最终结论。
 
 ---
@@ -1072,9 +1071,9 @@ Snippets 无版本历史，**只能靠备份文本**：
   单独放宽**收益低**，且会**吞掉面板的 POST 路由**（`/tg/webhook`、`flag=` 系列都是 POST），引入路由冲突风险。
 - **结论**：等 10.1 一起做，或不做。
 
-### 10.3 `Access-Control-Allow-Origin` 未补 —— 不做
+### 10.3 `Access-Control-Allow-Origin` —— ✅ 已补（本轮回填）
 
-- **内容**：响应未带 CORS 头。
-- **为何不做**：**仅浏览器拨号器场景需要**（浏览器内直接发起 xHTTP 请求）；
-  本项目目标客户端（v2rayN / Xray / sing-box / Shadowrocket 等）均为原生程序，不受 CORS 限制，**非本轮目标**。
-- **注意**：这是**有意省略**，不是遗漏 —— 排障时不要把它当成"打不开网页"的原因。
+- **现状**：响应**已带** CORS 头。`worker.js:2082` 的 `XH_HD` 含 `'Access-Control-Allow-Origin':'*'`；
+  `worker.js:2144` 还会按请求 `Origin` 回显（`hh.set('Access-Control-Allow-Origin', og)`）；`snippets.js` 侧同样已带。
+- **轮次**：该头是在**本修复轮的工作区改动**中补入的（`HEAD` 版本的 `worker.js` / `snippets.js` 均**不含**此头，属本轮相对 HEAD 的新增；原「不做」结论作废）。
+- **注意**：本项**不再是"有意省略"**；排障时不要把它当成"打不开网页"的原因，也不要再按"缺 CORS 头"去排查。

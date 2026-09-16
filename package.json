@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "predeploy": "node _predeploy_check.mjs",
+    "check": "node _predeploy_check.mjs"
+  },
   "dependencies": {
     "javascript-obfuscator": "^5.7.0",
     "terser": "^5.51.2"

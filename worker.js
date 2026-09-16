@@ -68,12 +68,12 @@ async function _getECH(doh = ECH_DNS, allowBackup = true) {
     const buf = new Uint8Array(await res.arrayBuffer());
     let offset = 12;
     const ancount = (buf[6] << 8) | buf[7];
-    while (buf[offset] !== 0) { if ((buf[offset] & 0xc0) === 0xc0) { offset += 2; break; } offset += buf[offset] + 1; }
+    while (offset < buf.length && buf[offset] !== 0) { if ((buf[offset] & 0xc0) === 0xc0) { offset += 2; break; } offset += buf[offset] + 1; }
     if (buf[offset] === 0) offset++;
     offset += 4;
     for (let i = 0; i < ancount; i++) {
       if ((buf[offset] & 0xc0) === 0xc0) offset += 2;
-      else { while (buf[offset] !== 0) offset += buf[offset] + 1; offset++; }
+      else { while (offset < buf.length && buf[offset] !== 0) offset += buf[offset] + 1; offset++; }
       const rtype = (buf[offset] << 8) | buf[offset + 1]; offset += 2;
       offset += 2; offset += 4;
       const rdlen = (buf[offset] << 8) | buf[offset + 1]; offset += 2;
@@ -82,7 +82,7 @@ async function _getECH(doh = ECH_DNS, allowBackup = true) {
         offset += 2;
         if (buf[offset] === 0) offset++;
         else if ((buf[offset] & 0xc0) === 0xc0) offset += 2;
-        else { while (buf[offset] !== 0) offset += buf[offset] + 1; offset++; }
+        else { while (offset < buf.length && buf[offset] !== 0) offset += buf[offset] + 1; offset++; }
         while (offset < rdataEnd) {
           const key = (buf[offset] << 8) | buf[offset + 1]; offset += 2;
           const vlen = (buf[offset] << 8) | buf[offset + 1]; offset += 2;
@@ -256,6 +256,7 @@ const parseAddr = (b, o, t) => {
 const parseVP = c => {
   if (c.length < 24 || !matchID(c)) return null;
   let o = 19 + c[17];
+  if (c[o - 1] !== 1) return null;   // P1-11：仅接受 cmd=1(TCP)，拒绝 cmd=2(UDP)/MUX，对齐 xHTTP 侧
   const p = (c[o] << 8) | c[o + 1];
   let t = c[o + 2];
   if (t !== 1) t += 1;
@@ -286,6 +287,98 @@ const parseAddressPort = (seg) => {
     if (/^\d+$/.test(portText)) return [addr, Number(portText)];
   }
   return [raw, 443];
+};
+
+/* ===== P0-2 方案B helper：ext_url 目标安全校验（自包含，无副作用；以 audit_E_ssrf_plan.md 附录 A.3 为准） ===== */
+const _ipv4ToLong = (ip) => {
+    const p = String(ip).split('.').map(Number);
+    if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    return (((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]) >>> 0;
+};
+// [网段, 前缀]：覆盖 RFC1918 / 回环 / 链路本地 / CGNAT / 保留 / 组播 / 基准测试
+const _BLOCKED_V4 = [
+    ['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],
+    ['172.16.0.0',12],['192.0.0.0',24],['192.0.2.0',24],['192.168.0.0',16],['198.18.0.0',15],
+    ['198.51.100.0',24],['203.0.113.0',24],['224.0.0.0',4],['240.0.0.0',4]
+].map(([b,p]) => { const l = _ipv4ToLong(b); return [ (l >>> (32-p)) >>> 0, p ]; });
+const _isBlockedV4 = (long) => long !== null && _BLOCKED_V4.some(([net,p]) => ((long >>> (32-p)) >>> 0) === net);
+// 归一化各类 IPv4 字面量写法：十进制整数 / 0x 十六进制 / 八进制 / 混合段
+const _normalizeV4Literal = (h) => {
+    const parts = String(h).split('.');
+    const toByte = (s) => /^0x[0-9a-f]+$/i.test(s) ? parseInt(s,16)
+                       : /^0[0-7]+$/.test(s) && s.length>1 ? parseInt(s,8)
+                       : /^\d+$/.test(s) ? Number(s) : NaN;
+    const vals = parts.map(toByte);
+    if (vals.length === 1 && Number.isInteger(vals[0]) && vals[0] >= 0 && vals[0] <= 0xFFFFFFFF)
+        return [(vals[0]>>>24)&255,(vals[0]>>>16)&255,(vals[0]>>>8)&255,vals[0]&255].join('.');
+    if (vals.length === 4 && vals.every(v => Number.isInteger(v) && v>=0 && v<=255)) return vals.join('.');
+    return null;
+};
+// 展开 IPv6 为 8 个 16-bit 组：兼容 :: 压缩、尾部内嵌点分 v4、大小写、前导零
+const _expandV6 = (h) => {
+    const s = String(h).toLowerCase().replace(/^\[|\]$/g, '');
+    let core = s, tail = null;
+    const dot = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+    if (dot) { core = dot[1] + '0:0'; tail = _normalizeV4Literal(dot[2]); }
+    const dbl = core.indexOf('::');
+    let groups;
+    if (dbl >= 0) {
+        const head = core.slice(0, dbl).split(':').filter(x => x !== '');
+        const tailg = core.slice(dbl + 2).split(':').filter(x => x !== '');
+        const fill = 8 - head.length - tailg.length;
+        if (fill < 0) return null;
+        groups = [...head.map(x=>parseInt(x||'0',16)), ...Array(fill).fill(0), ...tailg.map(x=>parseInt(x||'0',16))];
+    } else {
+        groups = core.split(':').filter(x => x !== '').map(x=>parseInt(x||'0',16));
+    }
+    if (groups.length !== 8 || groups.some(g => !Number.isInteger(g) || g < 0 || g > 0xffff)) return null;
+    if (tail) { const l = _ipv4ToLong(tail); groups[6] = (l>>>16)&0xffff; groups[7] = l&0xffff; }
+    return groups;
+};
+// 位掩码判定回环/ULA/链路本地/组播 + 末 32 位提取 v4-embedded（mapped/translated/NAT64）
+const _isBlockedV6 = (h) => {
+    const g = _expandV6(h);
+    if (!g) return true;                                                   // 无法解析 → 保守判为不安全
+    if (g.every((x,i) => i===7 ? x===1 : x===0)) return true;              // ::1 回环
+    if ((g[0] & 0xfe00) === 0xfc00) return true;                           // fc00::/7 ULA
+    if ((g[0] & 0xffc0) === 0xfe80) return true;                           // fe80::/10 链路本地
+    if ((g[0] & 0xff00) === 0xff00) return true;                           // ff00::/8 组播
+    const compat = g[0]===0&&g[1]===0&&g[2]===0&&g[3]===0&&g[4]===0&&g[5]===0;             // ::/96 IPv4-compatible（含未指定 ::）
+    if (compat) return true;                                               // 【附录D补丁①】整体封禁 ::/96
+    const mapped = g[0]===0&&g[1]===0&&g[2]===0&&g[3]===0&&g[4]===0&&g[5]===0xffff;        // ::ffff:a.b.c.d
+    const transl = g[0]===0&&g[1]===0&&g[2]===0&&g[3]===0&&g[4]===0xffff&&g[5]===0;        // ::ffff:0:a.b.c.d
+    const nat64  = g[0]===0x64&&g[1]===0xff9b&&g[2]===0&&g[3]===0&&g[4]===0&&g[5]===0;     // 64:ff9b::/96
+    if (mapped || transl || nat64) {
+        const v4 = `${(g[6]>>8)&255}.${g[6]&255}.${(g[7]>>8)&255}.${g[7]&255}`;
+        return _isBlockedV4(_ipv4ToLong(v4));
+    }
+    return false;
+};
+// 域名分支保留原字符串前缀黑名单（防回归）+ 补 .local/.internal
+const _extHostSafe = (hostname) => {
+    const h = String(hostname||'').replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (h.includes(':')) return { ok: !_isBlockedV6(h), host: h };
+    const norm = _normalizeV4Literal(h);
+    if (norm) return { ok: !_isBlockedV4(_ipv4ToLong(norm)), host: norm };
+    if (/^(localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.)/i.test(h)) return { ok: false, host: h };
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return { ok: false, host: h };
+    if (/\.(local|internal)$/i.test(h)) return { ok: false, host: h };
+    return { ok: true, host: h };
+};
+// 有上限读取（256KB）
+const _readCapped = async (res, max = 262144) => {
+    if (!res.body) return '';
+    const reader = res.body.getReader(); const chunks = []; let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > max) { try { await reader.cancel(); } catch {} throw new Error('ext response too large'); }
+        chunks.push(value);
+    }
+    const buf = new Uint8Array(total); let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+    return new TextDecoder().decode(buf);
 };
 
 /* ---------- SOCKS5 / HTTP 凭证解析 ---------- */
@@ -1283,7 +1376,9 @@ const sprout = (f, h, p, s = f.connect({ hostname: h, port: p })) => { let d = !
 
 /* ---------- DoH JSON 查询（EDT 对齐：直连预解析与反代池展开共用；120s 缓存，5s 超时，双端点回退） ---------- */
 const _dohCache = new Map();
-const _dohQ = async (name, type) => {
+/* 原始 Answer 数组（保留 type 字段）：EDT「解析地址端口」按 r.type 过滤 A(1)/AAAA(28)/TXT(16)，
+   若在此处就把 type 丢掉，反代腿就无法区分 CNAME 链里的 A 记录与真正的 AAAA */
+const _dohQRaw = async (name, type) => {
   const key = type + ':' + String(name || '').toLowerCase().replace(/\.$/, '');
   const now = Date.now();
   const c = _dohCache.get(key);
@@ -1293,7 +1388,7 @@ const _dohQ = async (name, type) => {
     try {
       const r = await fetch(ep + '?name=' + encodeURIComponent(name) + '&type=' + type, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(5000) });
       if (!r.ok) continue;
-      out = ((await r.json()).Answer || []).map(x => String(x.data));
+      out = ((await r.json()).Answer || []);
       if (out.length) break;
     } catch (e) {}
   }
@@ -1301,26 +1396,44 @@ const _dohQ = async (name, type) => {
   if (_dohCache.size > 200) _dohCache.clear();
   return out;
 };
+const _dohQ = async (name, type) => (await _dohQRaw(name, type)).map(x => String(x.data));
 const _v4 = s => { s = String(s || '').replace(/\.$/, ''); return /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(s) ? s : null; };
 const _isIpHost = h => _v4(h) || String(h).includes(':');
-/* 反代地址展开（EDT「解析地址端口」对齐：域名 TXT 池优先，兼容 !txt 后缀；180s 缓存） */
+/* 反代地址展开（EDT「解析地址端口」6437-6509 对齐：域名 TXT 池 → A → AAAA → 保留原域名；180s 缓存）
+   注意：Snippets 侧**故意不实现** A/AAAA 兜底——Snippets 出站预算仅 2 次（fetch 与 connect 合并计数），
+   TXT+A 并行查询 + 直连腿就会超预算，故 Snippets 保持隐式 connect(主机名)。这是逐环境适配。 */
 const PIP_TP1 = ['proxyip.tp1.090227.xyz', 1]; // CMLiu 生态按机房寻找服务（EDT 同款末级兜底）
 const _pipCache = new Map();
 const pipExpand = async pIP => {
   const a = String(pIP.address || '').replace(/!txt$/i, '').trim();
-  const key = a.toLowerCase() + ':' + (+pIP.port || 443);
+  const port = +pIP.port || 443;
+  const key = a.toLowerCase() + ':' + port;
   const now = Date.now();
   const c = _pipCache.get(key);
   if (c && now - c.t < 180000) return c.l;
   let list = [];
   if (!_isIpHost(a)) {
+    let txt = [], a4 = [];
     try {
-      list = (await _dohQ(a, 'TXT')).flatMap(d => String(d).replace(/^"|"$/g, '').replace(/\\010/g, ',').split(','))
+      // EDT 同款：TXT 与 A 并行发起（Workers 有 1000 次 subrequest 预算，可以这么花）
+      const [tr, ar] = await Promise.all([_dohQRaw(a, 'TXT'), _dohQRaw(a, 'A')]);
+      txt = tr.filter(r => r.type === 16).map(r => String(r.data));
+      a4 = ar.filter(r => r.type === 1).map(r => String(r.data)).map(_v4).filter(Boolean);
+    } catch (e) {}
+    if (txt.length) {
+      list = txt.flatMap(d => String(d).replace(/^"|"$/g, '').replace(/\\010/g, ',').split(','))
         .map(s => s.trim()).filter(Boolean).slice(0, 6)
         .map(s => { const [h2, p2] = parseAddressPort(s); return [h2, +p2 || 443]; });
-    } catch (e) {}
+    }
+    if (!list.length && a4.length) list = a4.map(ip => [ip, port]);
+    if (!list.length) {
+      try {
+        const a6 = (await _dohQRaw(a, 'AAAA')).filter(r => r.type === 28).map(r => '[' + String(r.data) + ']');
+        if (a6.length) list = a6.map(ip => [ip, port]);
+      } catch (e) {}
+    }
   }
-  if (!list.length) list = [[a, +pIP.port || 443]];
+  if (!list.length) list = [[a, port]]; // 三级全空 → 保留原域名
   _pipCache.set(key, { l: list, t: now });
   if (_pipCache.size > 200) _pipCache.clear();
   return list;
@@ -1966,7 +2079,7 @@ async function replyStats(env, chatId) {
 // 🟢 主入口 (防1101保护)
 // =============================================================================// ===== xHTTP/gRPC 入站（POST 流式；借鉴 EDT 叉HTTP，VLESS-only） =====
 // 响应头对齐 EDT 处理叉HTTP请求（609-614/621-625）：逐跳头 Connection 不得出现在 H2/H3 响应（RFC 9113 §8.2.2）；grpc-status 属 gRPC 路径（EDT 991-996），xHTTP 保留无害
-const XH_HD={'Content-Type':'application/octet-stream','grpc-status':'0','X-Accel-Buffering':'no','Cache-Control':'no-store'},
+const XH_HD={'Content-Type':'application/octet-stream','grpc-status':'0','X-Accel-Buffering':'no','Cache-Control':'no-store','Access-Control-Allow-Origin':'*'},
 // 首包就绪判定：对齐 EDT 读取叉HTTP首包（823-861）——校验 cmd∈{1,2}；domain 需 addrType+len+域名字节齐备（原 n>=o+3+l 少 1 字节，会误判就绪后 400）
 XH_HS=b=>{const n=b.length;if(n<19)return 1;const o=19+b[17];if(n<o+3)return 1;const c=b[o-1];if(1!==c&&2!==c)return-1;const t=b[o+2];if(1===t)return n>=o+7?0:1;if(3===t)return n>=o+19?0:1;if(2===t){if(n<o+4)return 1;const l=b[o+3];return l?n>=o+4+l?0:1:-1}return-1},
 XH_R=t=>{try{t&&t.close&&t.close()}catch{}},
@@ -1977,28 +2090,88 @@ const XH_hfLen=t=>{const b=new TextEncoder().encode(t);let n=0;for(let i=0;i<b.l
 XH_pdGen=n=>{let r="";for(let i=0;i<n;i++)r+=XH_B62[Math.random()*62|0];return r},
 XH_pdChk=e=>{const h=e.headers.get(XH_PDH);let v="";if(h){try{const q=new URL(h,"https://x.invalid").searchParams.get(XH_PDK);v=q||h}catch{v=h}}v=v||new URL(e.url).searchParams.get(XH_PDK)||"";if(!v)return!0;const l=XH_hfLen(v);return l>=98&&l<=1002},
 XH_ST=h=>{h=String(h).toLowerCase();return h==="speed.cloudflare.com"||h==="cp.cloudflare.com"||h.endsWith(".speed.cloudflare.com")||h.endsWith(".cp.cloudflare.com")},
-XH_UP=rm=>{const w=rm.writable.getWriter(),b=new Uint8Array(20480);let n=0,t=null;const fl=()=>{if(!n)return;const c=b.slice(0,n);n=0;w.write(c).catch(()=>{})};return{put(v){if(!v||!v.length)return;if(v.length>=20480){fl();w.write(v).catch(()=>{});return}n+v.length>20480&&fl();b.set(v,n),n+=v.length,t||(t=setTimeout(()=>{t=null;fl()},1))},end(){t&&(clearTimeout(t),t=null),fl();try{w.close()}catch{}}}},
+XH_UP=rm=>{const w=rm.writable.getWriter(),b=new Uint8Array(20480);let n=0,t=null,q=Promise.resolve();
+const fl=()=>{if(!n)return;const c=b.slice(0,n);n=0;q=q.then(()=>w.write(c)).catch(()=>{})};
+const wq=v=>{q=q.then(()=>w.write(v)).catch(()=>{})};
+return{put(v){if(!v||!v.length)return;if(v.length>=20480){fl();wq(v);return}n+v.length>20480&&fl();b.set(v,n),n+=v.length,t||(t=setTimeout(()=>{t=null;fl()},1))},end(){t&&(clearTimeout(t),t=null);fl();return q.then(()=>w.close()).catch(()=>{})}}},
 XH_CAT=(a,b)=>{const o=new Uint8Array(a.length+b.length);return o.set(a),o.set(b,a.length),o};
+// ===== gRPC 传输（Xray gun 协议，对齐 EDT 处理gRPC请求 978-1222）=====
+// 帧 = [1B 压缩标志 0x00] [4B 大端长度] [消息体]；消息体 = protobuf Hunk（field1=bytes: 0x0a + varint(len) + data）
+// 上行剥帧并解 Hunk；下行封 Hunk 再封帧
+const XH_GCHK=b=>{if(!b||b.length<5||b[0]!==0)return!1;const n=((b[1]<<24)>>>0)|(b[2]<<16)|(b[3]<<8)|b[4];if(n<1||n>0x1000000)return!1;if(b.length>=5+n&&b[5]!==10)return!1;return!0};
+const XH_GFR=c=>{c=c instanceof Uint8Array?c:new Uint8Array(c);const L=[];let r=c.byteLength>>>0;while(r>127){L.push((r&127)|128);r>>>=7}L.push(r);const n=1+L.length+c.byteLength,f=new Uint8Array(5+n);f[0]=0;f[1]=(n>>>24)&255;f[2]=(n>>>16)&255;f[3]=(n>>>8)&255;f[4]=n&255;f[5]=10;f.set(new Uint8Array(L),6);f.set(c,6+L.length);return f};
+const XH_GDEC=b=>{const o=[];const p=b;const len=p.length;let off=0;while(len-off>=5){const n=((p[off+1]<<24)>>>0)|(p[off+2]<<16)|(p[off+3]<<8)|p[off+4],f=5+n;if(len-off<f)break;const body=p.subarray(off+5,off+f);off+=f;if(!body.length)continue;let q=body;if(q.length>=2&&q[0]===10){let i=1,s=0,k=!1;while(i<q.length){const c=q[i++];if(!(c&128)){k=!0;break}s+=7;if(s>35)break}if(k)q=q.subarray(i)}if(q.length)o.push(q)}return{out:o,rest:off?p.subarray(off):p}};
+const XH_GUP=(head,rd,d0)=>{
+let p=head||new Uint8Array(0);
+const em=c=>{const r=XH_GDEC(p);p=r.rest;r.out.forEach(x=>c.enqueue(x))};
+return new ReadableStream({
+async start(c){
+em(c);if(d0){c.close();return}
+try{for(;;){const{done,value}=await rd.read();if(done){em(c);c.close();return}if(value&&value.byteLength){p=XH_CAT(p,value instanceof Uint8Array?value:new Uint8Array(value));em(c)}}}
+catch(e){try{c.error(e)}catch{}}
+}
+});
+};
+const XH_REW=(head,rd,d0)=>new ReadableStream({
+async start(c){
+if(head&&head.length)c.enqueue(head);
+if(d0){c.close();return}
+try{for(;;){const{done,value}=await rd.read();if(done){c.close();return}c.enqueue(value)}}
+catch(e){try{c.error(e)}catch{}}
+}
+});
+const XH_pdFeat=e=>{const h=e.headers.get(XH_PDH);let v="";if(h){try{const q=new URL(h,"https://x.invalid").searchParams.get(XH_PDK);v=q||h}catch{v=h}}v=v||new URL(e.url).searchParams.get(XH_PDK)||"";return!!v};
+const XH_isGrpc=e=>((e.headers.get('content-type')||'').toLowerCase().startsWith('application/grpc'))&&!XH_pdFeat(e);
 async function xhF(req, env, fbPip){if(!req.body)return new Response(null,{status:400});if(!XH_pdChk(req))return new Response("Bad Request",{status:400});
-const rd=req.body.getReader(),ts=XH_TS();let buf=new Uint8Array(0),ss=null;
+// ① 读首包：XH_HS 就绪判定 + parseVP（内含 matchID UUID 校验），读完立即 releaseLock（对齐 EDT 读取叉HTTP首包）
+const rd0=req.body.getReader();let buf=new Uint8Array(0),ss=null;
 try{for(;;){const st=XH_HS(buf);if(!st){ss=parseVP(buf);if(!ss)throw 0;break}if(st<0||buf.length>=16384)throw 0;
-const{done,value}=await rd.read();if(done)throw 0;buf=XH_CAT(buf,value)}}
-catch{try{rd.cancel()}catch{}return new Response(null,{status:400})}
+const{done,value}=await rd0.read();if(done)throw 0;buf=XH_CAT(buf,value)}}
+catch{try{rd0.cancel()}catch{}return new Response(null,{status:400})}
+try{rd0.releaseLock()}catch{}
 if(buf[18+buf[17]]===2)return new Response("UDP is not supported",{status:400});
-let rm=null,rc=null,dead=!1,hn=null;
-const drop=()=>{if(!dead){dead=!0;XH_R(rm);try{rd.cancel()}catch{}}};
+// ② 路由配置 + 建连（204 短路沿用既有实现：已线上实测有效）
 const url=new URL(req.url);if(url.pathname.includes("%3F")){try{const d2=decodeURIComponent(url.pathname),q2=d2.indexOf("?");-1!==q2&&(url.search=d2.substring(q2),url.pathname=d2.substring(0,q2))}catch{}}
+let rm=null;
 try{let fbPIP=fbPip||DEFAULT_PROXY_IP;if(fbPIP)fbPIP=String(fbPIP).replace(/^https?:\/\//i,"").replace(/\/+$/,"");
-rc=pCfg(url,url.pathname.slice(1),fbPIP);hn=addr(ss.addrType,ss.targetAddrBytes);
+const rc=pCfg(url,url.pathname.slice(1),fbPIP),hn=addr(ss.addrType,ss.targetAddrBytes);
 if(!rc.gP&&XH_ST(hn))return new Response(XH_CAT(new Uint8Array([buf[0],0]),new TextEncoder().encode("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")),{status:200,headers:XH_HD});
-rm=await tryCon(req.fetcher,ss.addrType,hn,ss.port,rc);const w2=rm.writable.getWriter();if(ss.dataOffset<buf.length)await w2.write(buf.subarray(ss.dataOffset));w2.releaseLock()}catch(e2){drop();return new Response("xhERR:"+((e2&&e2.message)||"unknown"),{status:502})}
-let hh;try{hh=new Headers(XH_HD)}catch{hh=new Headers()}try{const pu=new URL("https://x.invalid/");pu.searchParams.set(XH_PDK,XH_pdGen(100+Math.floor(Math.random()*901)));hh.set(XH_PDH,pu.toString())}catch{}
-req.signal&&req.signal.addEventListener&&req.signal.addEventListener("abort",drop);
-const pre=new ReadableStream({start(c){c.enqueue(new Uint8Array([buf[0],0]));c.close()}}).pipeTo(ts.writable,{preventClose:!0}).catch(()=>{});
-const ub=XH_UP(rm);
-(async()=>{try{for(;;){if(dead)break;const{done,value}=await rd.read();if(done)break;dead||ub.put(value)}}catch{}dead=!0;ub.end()})();
-pre.then(()=>{rm.readable.pipeTo(ts.writable).catch(()=>{drop()})});
+rm=await tryCon(req.fetcher,ss.addrType,hn,ss.port,rc)}catch(e2){try{XH_R(rm)}catch{}return new Response("xhERR:"+((e2&&e2.message)||"unknown"),{status:502})}
+// ③ 首包负载直写远端
+try{const w2=rm.writable.getWriter();try{if(ss.dataOffset<buf.length)await w2.write(buf.subarray(ss.dataOffset))}finally{try{w2.releaseLock()}catch{}}}catch(e3){try{XH_R(rm)}catch{}return new Response("xhERR:"+((e3&&e3.message)||"unknown"),{status:502})}
+// ④ 响应头
+// ④ ACAO：EDT WriteResponseHeader 对齐——有 Origin 则回显（浏览器可带凭据/任意源），否则 XH_HD 的 '*'
+let hh;try{hh=new Headers(XH_HD)}catch{hh=new Headers()}try{const og=req.headers.get('Origin');og&&hh.set('Access-Control-Allow-Origin',og)}catch{}try{const pu=new URL("https://x.invalid/");pu.searchParams.set(XH_PDK,XH_pdGen(100+Math.floor(Math.random()*901)));hh.set(XH_PDH,pu.toString())}catch{}
+// ⑤ 上下行：严格对齐 EDT「处理叉HTTP请求」的双 Promise + 自有 AbortController
+//    · 下行：显式 writer 写握手前缀 → releaseLock → 再 pipeTo（不用 pipeTo+preventClose：
+//      该写法依赖运行时对 preventClose 的抑制语义，workerd 的 IdentityTransformStream 与
+//      Node 的 TransformStream 不等价，桩测覆盖不到）
+//    · 上行：只在【失败】时清理（EDT 为 上行Promise.catch(清理)）。此前"请求体一结束就 drop
+//      远端 socket"会把 socket 两侧一起强关（官方 close() 语义），正是下行被掐断的元凶
+//    · 解绑 req.signal：改用自有 AbortController，避免信号提前 abort 误杀 socket
+const ts=XH_TS(),ac=new AbortController();let done=!1,rd=null;
+const clean=()=>{if(done)return;done=!0;try{ac.abort()}catch{}try{XH_R(rm)}catch{}try{rd&&rd.cancel()}catch{}};
+const dnP=(async()=>{const w=ts.writable.getWriter();
+try{await w.write(new Uint8Array([buf[0],0]))}catch(e){try{await w.abort(e)}catch{}throw e}finally{try{w.releaseLock()}catch{}}
+await rm.readable.pipeTo(ts.writable,{signal:ac.signal})})();
+dnP.then(clean,clean);
+const upP=(async()=>{const ub=XH_UP(rm);rd=req.body.getReader();
+try{for(;;){const{done:dn,value}=await rd.read();if(dn)break;if(value&&value.byteLength)ub.put(value)}}finally{try{await ub.end()}catch{}}})();
+upP.catch(clean);
 return new Response(ts.readable,{status:200,headers:hh})}
+// gRPC 入口：先嗅探首帧确认是否 gRPC 帧；是则上行剥帧 → 复用 xhF → 下行封帧；否则回退 xhF（保护 packet-up/raw）
+async function grpF(req, env, fbPip){
+  if(!req.body)return new Response(null,{status:400});
+  const rd=req.body.getReader();let head=new Uint8Array(0),d0=!1;
+  try{while(head.length<5){const{done,value}=await rd.read();if(done){d0=!0;break}if(value&&value.byteLength)head=XH_CAT(head,value instanceof Uint8Array?value:new Uint8Array(value))}}catch{d0=!0}
+  const mk=body=>({url:req.url,method:req.method,headers:req.headers,body,cf:req.cf,fetcher:req.fetcher});
+  if(!XH_GCHK(head))return xhF(mk(XH_REW(head,rd,d0)),env,fbPip);
+  const res=await xhF(mk(XH_GUP(head,rd,d0)),env,fbPip);
+  if(!res.body)return res;
+  const hh=new Headers(res.headers);hh.set('Content-Type','application/grpc');hh.set('grpc-status','0');
+  const out=new ReadableStream({async start(c){const rr=res.body.getReader();try{for(;;){const{done,value}=await rr.read();if(done)break;if(value&&value.byteLength)c.enqueue(XH_GFR(value))}}catch{}try{c.close()}catch{}}});
+  return new Response(out,{status:res.status,headers:hh});
+}
 
 
 export default {
@@ -2062,11 +2235,25 @@ export default {
         return ws(r, env);
       }
 
-      // 🟣 xHTTP/gRPC 入口（POST 流式；EDT 兼容：同 WS 一样不做 UA 过滤）
-      const ct = (r.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
-      if (r.method === 'POST' && (ct === 'application/grpc' || ct === 'application/octet-stream')) {
+      // 🟣 xHTTP/gRPC 入口（EDT 对齐：POST 即进，不再限定 Content-Type）
+      // 放宽理由：Xray packet-up 模式（FillPacketRequest）**不设 Content-Type**，旧门槛
+      //   `ct==='application/grpc'||'application/octet-stream'` 会把 packet-up 的 POST 挡在门外，
+      //   直接落到面板 404。EDT 的做法是 `request.method === 'POST'`（仅排除 admin/ 与 login）。
+      // 面板/管理端点必须**显式排除**（否则后台 POST 表单会被当成 VLESS 首包解析 → 400）：
+      //   · /tg/webhook                    —— TG 回调（/stats 命令）
+      //   · ?flag=*                        —— 后台管理 API：add_whitelist / del_whitelist /
+      //                                       validate_tg / validate_cf / set_webhook / save_config
+      //   · /sub、/{_SUB_PW}               —— 订阅端点
+      //   · /favicon.ico、/version         —— 固定 404 探测端点
+      const xhExcl = r.method === 'POST' && (
+        url.pathname === '/tg/webhook' || url.pathname === '/sub' ||
+        url.pathname === '/favicon.ico' || url.pathname === '/version' ||
+        (_SUB_PW && url.pathname === `/${_SUB_PW}`) || url.searchParams.has('flag'));
+      if (r.method === 'POST' && !xhExcl) {
         if (!url.searchParams.has('flag') && env.DB) ctx.waitUntil(incrementDailyStats(env));
-        return xhF(r, env, _PROXY_IP);
+        // gRPC/xHTTP 共用入口：EDT 规则先判候选（application/grpc 且无 xHTTP padding 特征），
+        // 再由 grpF 以「首帧合法性」确认；非 gRPC 帧回退 xhF（packet-up/raw 不受影响）
+        return XH_isGrpc(r) ? grpF(r, env, _PROXY_IP) : xhF(r, env, _PROXY_IP);
       }
 
       // 📊 TG Webhook：/stats 命令查询 CF 用量（仅响应配置的 chat_id）
@@ -2089,21 +2276,15 @@ export default {
       }
 
       let isGlobalAdmin = await checkWhitelist(env, clientIP);
-      let isValidUser = false; 
       let hasAuthCookie = false; 
-
-      const paramUUID = url.searchParams.get('uuid');
-      if (paramUUID && paramUUID.toLowerCase() === _UUID.toLowerCase()) isValidUser = true;
-      if (_SUB_PW && url.pathname === `/${_SUB_PW}`) isValidUser = true;
 
       if (_WEB_PW) {
         const cookie = r.headers.get('Cookie') || "";
         const regex = new RegExp(`(^|;\\s*)auth=${_WEB_PW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(;|$)`);
         if (regex.test(cookie)) {
-            isValidUser = true; hasAuthCookie = true;
+            hasAuthCookie = true;
         }
       }
-      if (isGlobalAdmin) isValidUser = true;
 
       if (url.pathname === '/favicon.ico') return new Response(null, { status: 404 });
 
@@ -2353,18 +2534,27 @@ export default {
               if (extUrl) {
                   try {
                       const _u = new URL(extUrl);
-                      const _h = _u.hostname.replace(/^\[|\]$/g, '');
-                      const _v6 = _h.includes(':');
-                      _extOk = _u.protocol === 'https:' && (_v6
-                          ? !/^(::1$|fc|fd|fe80)/i.test(_h)
-                          : (!/^(localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.)/i.test(_h) && !/^172\.(1[6-9]|2\d|3[01])\./.test(_h)));
+                      const _safe = _extHostSafe(_u.hostname);
+                      const _port = _u.port ? Number(_u.port) : 443;
+                      _extOk = _u.protocol === 'https:' && _safe.ok && (_port === 443);
                   } catch {}
               }
               if (source === 'ext' && extUrl && _extOk) {
                   try {
-                      const extRes = await fetch(extUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-                      const extText = await extRes.text();
-                      allIPs = extText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+                      const extRes = await fetch(extUrl, {
+                          headers: { 'User-Agent': 'Mozilla/5.0' },
+                          redirect: 'manual',                     // 不自动跟随，阻断重定向打内网
+                          signal: AbortSignal.timeout(5000)       // 超时，阻断慢速资源耗尽
+                      });
+                      if (extRes.status >= 300 && extRes.status < 400) {  // 显式处理重定向：校验后再决定
+                          const loc = extRes.headers.get('Location');
+                          const lu = loc ? new URL(loc, extUrl) : null;
+                          if (!lu || lu.protocol !== 'https:' || !_extHostSafe(lu.hostname).ok || (lu.port ? Number(lu.port) : 443) !== 443) { allIPs = []; }
+                          else { const r2 = await fetch(lu.toString(), { headers:{'User-Agent':'Mozilla/5.0'}, redirect:'manual', signal: AbortSignal.timeout(5000) }); allIPs = (await _readCapped(r2)).split('\n').map(l=>l.trim()).filter(l=>l && !l.startsWith('#')); }
+                      } else {
+                          const extText = await _readCapped(extRes);
+                          allIPs = extText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+                      }
                   } catch { allIPs = []; }
               } else {
                   allIPs = await getCustomIPs(env, _DLS);

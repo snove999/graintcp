@@ -1,9 +1,10 @@
 // 测试夹具：模拟 workerd 环境，验证 worker.js / snippets.js 的路径解析与 WS 流程
 import { readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+// 用 fileURLToPath 而非 URL.pathname：后者是 percent-encoded 的，
+// 路径含非 ASCII（如 `GitHub系列`）时会被双重编码，导致 import() 解析失败。
+const DIR = fileURLToPath(new URL('.', import.meta.url));
 import crypto from 'node:crypto';
-
-const DIR = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
 // ---------- workerd 环境桩 ----------
 // Node 的 Response 拒绝 101 + webSocket，改用轻量桩
@@ -146,7 +147,7 @@ const extractUuid = (line) => (line.match(/UUID="([^"]+)"/) || [0, SNIP_UUID_FAL
 
 async function loadWorker() {
   const src = readFileSync(DIR + 'worker.js', 'utf8');
-  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS };\n';
+  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\n';
   writeFileSync(DIR + '_worker_test.mjs', patched);
   return import(pathToFileURL(DIR + '_worker_test.mjs').href);}
 
@@ -769,14 +770,27 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     const SN6 = await import(pathToFileURL(DIR + 'snippets.js').href);
     const snipUuid6 = extractUuid(readFileSync(DIR + 'snippets.js', 'utf8').split('\n')[0]);
     connectLog = []; __pairs.length = 0;
+    // Snippets 出站预算实测仅 2 次（fetch 与 connect 合并计数）：直连腿失败后若再做 TXT 查询
+    // 就是第 3 次 → 线上 502「Too many subrequests」。故 Snippets 侧改为：域名 proxyip（无 !txt）
+    // 直接 connect 主机名（预算内）；只有显式 !txt 才查 TXT 池。Workers 侧不受此限，保留 TXT 预解析。
     const reqS = stubRequest('https://w.test/proxyip=pool.test', { 'Upgrade': 'websocket' });
     reqS.fetcher = mkFailFetcher(['snip-target.org']);
     await SN6.default.fetch(reqS, undefined, { waitUntil() {} });
     const pairS = __pairs[__pairs.length - 1];
     pairS.server._onmessage(vlessFrame(snipUuid6, 'snip-target.org', 443, new Uint8Array([7])));
     await sleep(300);
-    check('snippets /proxyip=域名：TXT 优先池展开（EDT 对齐）', connectLog.some(s => (s.host === '1.2.3.4' && s.port === 11485) || s.host === '5.6.7.8'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    check('snippets /proxyip=域名（无 !txt）：预算内直接 connect 主机名', connectLog.some(s => s.host === 'pool.test'), connectLog.map(s => s.host + ':' + s.port).join(','));
     pairS.client.close();
+
+    connectLog = []; __pairs.length = 0;
+    const reqS2 = stubRequest('https://w.test/proxyip=pool.test!txt', { 'Upgrade': 'websocket' });
+    reqS2.fetcher = mkFailFetcher(['snip-target.org']);
+    await SN6.default.fetch(reqS2, undefined, { waitUntil() {} });
+    const pairS2 = __pairs[__pairs.length - 1];
+    pairS2.server._onmessage(vlessFrame(snipUuid6, 'snip-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('snippets /proxyip=域名!txt：TXT 池展开（显式 opt-in，仍保留）', connectLog.some(s => (s.host === '1.2.3.4' && s.port === 11485) || s.host === '5.6.7.8'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    pairS2.client.close();
   } catch (e) { check('反代链 EDT 对齐测试', false, e.message); }
 
   globalThis.fetch = realFetch;
@@ -1041,8 +1055,151 @@ console.log('\n===== XH_HS 首包就绪边界 =====');
   }
 }
 
+// ================= 9. gRPC 帧编解码（P1-9 固化：codec 边界 + 正路径 E2E + 模式判定） =================
+// 说明：原 152 项中 content-type=application/grpc 的用例均使用「原始 VLESS 帧」，
+//       只覆盖 grpF 的回退分支（XH_GCHK=false → xhF）；本组补齐 gRPC 正路径与帧编解码边界。
+console.log('\n===== gRPC 编解码 =====');
+{
+  const { XH_GCHK, XH_GFR, XH_GDEC, XH_isGrpc } = WK;
+  const eqU8 = (a, b) => !!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]);
+  const catU8 = parts => { let n = 0; for (const p of parts) n += p.length; const o = new Uint8Array(n); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o; };
+  // 手写帧（独立于被测 GFR）：0x00 + BE32(n) + [0x0a + varint(len) + payload]
+  const mkGFrame = (payload, opt = {}) => {
+    const tag = opt.tag ?? 0x0a, flag = opt.flag ?? 0;
+    const L = []; let r = payload.length;
+    while (r > 127) { L.push((r & 0x7f) | 0x80); r >>>= 7; } L.push(r);
+    const body = Uint8Array.from([tag, ...L, ...payload]);
+    const n = opt.n ?? body.length;
+    const f = new Uint8Array(5 + body.length);
+    f[0] = flag; f[1] = (n >>> 24) & 255; f[2] = (n >>> 16) & 255; f[3] = (n >>> 8) & 255; f[4] = n & 255; f.set(body, 5);
+    return f;
+  };
+  const ghdr = (n, flag = 0) => Uint8Array.from([flag, (n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+
+  // ---- codec：XH_GCHK 首帧嗅探边界 ----
+  const P8 = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
+  check('gRPC GCHK 合法完整帧 → true', XH_GCHK(mkGFrame(P8)) === true);
+  check('gRPC GCHK b[0]≠0（压缩标志非 0）→ false', XH_GCHK(mkGFrame(P8, { flag: 1 })) === false);
+  check('gRPC GCHK n=0 → false', XH_GCHK(ghdr(0)) === false);
+  check('gRPC GCHK n>0x1000000（超上限）→ false', XH_GCHK(ghdr(0x1000001)) === false);
+  check('gRPC GCHK n=0x1000000（上限）→ true', XH_GCHK(ghdr(0x1000000)) === true);
+  check('gRPC GCHK 完整帧 b[5]≠0x0a → false', XH_GCHK(mkGFrame(P8, { tag: 0x12 })) === false);
+  check('gRPC GCHK 不完整帧（仅 5B 头，长度合法）→ true', XH_GCHK(mkGFrame(P8).subarray(0, 5)) === true);
+  check('gRPC GCHK 空/过短 → false', XH_GCHK(new Uint8Array(0)) === false && XH_GCHK(null) === false);
+
+  // ---- codec：XH_GFR 封帧格式 ----
+  const fr8 = XH_GFR(P8);
+  check('gRPC GFR 封帧格式 [0x00][BE32][0x0a][varint][payload]',
+    fr8[0] === 0 && fr8[5] === 0x0a && fr8[6] === P8.length && eqU8(fr8.subarray(7), P8),
+    'hdr=' + JSON.stringify(Array.from(fr8.subarray(0, 7))));
+  const big = new Uint8Array(300).map((_, i) => i & 255);
+  check('gRPC GFR 大载荷(300B) 多字节 varint 往返', eqU8(XH_GDEC(XH_GFR(big)).out[0], big));
+
+  // ---- codec：XH_GDEC 往返 / 半包 / 粘包 / 畸形 / 零长 ----
+  check('gRPC GDEC 往返：GFR→GDEC 还原 payload', (() => { const d = XH_GDEC(XH_GFR(P8)); return d.out.length === 1 && eqU8(d.out[0], P8) && d.rest.length === 0; })());
+  check('gRPC GDEC 半包：切分后 leftover 保留并可拼回', (() => {
+    const f = mkGFrame(P8), a = f.subarray(0, 6), b = f.subarray(6);
+    const r1 = XH_GDEC(a); if (r1.out.length !== 0 || r1.rest.length !== 6) return false;
+    const r2 = XH_GDEC(catU8([r1.rest, b])); return r2.out.length === 1 && eqU8(r2.out[0], P8);
+  })());
+  check('gRPC GDEC 粘包：2 帧一次喂入全部剥出', (() => {
+    const A = Uint8Array.from([1, 1, 1]), B = Uint8Array.from([2, 2, 2, 2]);
+    const d = XH_GDEC(catU8([XH_GFR(A), XH_GFR(B)]));
+    return d.out.length === 2 && eqU8(d.out[0], A) && eqU8(d.out[1], B) && d.rest.length === 0;
+  })());
+  check('gRPC GDEC 粘包+尾半帧：leftover 精确保留', (() => {
+    const A = Uint8Array.from([9, 9]), B = Uint8Array.from([8, 8]);
+    const d = XH_GDEC(catU8([XH_GFR(A), XH_GFR(B), XH_GFR(A).subarray(0, 4)]));
+    return d.out.length === 2 && d.rest.length === 4;
+  })());
+  check('gRPC GDEC 畸形帧（声明长度>实际）→ 不解出、保留 leftover', (() => {
+    const bad = mkGFrame(P8, { n: 999 });
+    const d = XH_GDEC(bad); return d.out.length === 0 && d.rest.length === bad.length;
+  })());
+  check('gRPC GDEC 零长/空 payload → 无输出不崩', (() => {
+    const d = XH_GDEC(XH_GFR(new Uint8Array(0)));
+    return d.out.length === 0 && d.rest.length === 0;
+  })());
+
+  // ---- E2E 正路径（此前零覆盖）：上行剥帧 → 复用 xhF → 下行封帧 ----
+  const G_UUID = '06b65903-406d-4a41-8463-6fd5c0ee7798';
+  const G_REPLY = Uint8Array.from([0x16, 3, 1, 0xab]);
+  const G_EXPECT = catU8([Uint8Array.from([0, 0]), G_REPLY]);
+  const gFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url instanceof URL ? url : url?.url || url);
+    if (/dns-query|\/resolve/.test(u) && /[?&]name=/.test(u)) return new RealResponse(JSON.stringify({ Answer: [] }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+    return new RealResponse('', { status: 200 });
+  };
+  const readAllU8 = async (stream) => { const out = []; const r = stream.getReader(); for (;;) { const { done, value } = await r.read(); if (done) break; if (value) out.push(Uint8Array.from(value)); } return out; };
+  // 本地普通 socket（非 workerd 的 type:'bytes'/HWM:0，避免半包场景下的时序抖动）
+  const gReq = (host, chunks) => {
+    let i = 0;
+    const body = new ReadableStream({ pull(c) { if (i < chunks.length) c.enqueue(chunks[i++]); else c.close(); } });
+    return {
+      url: 'https://w.test/grpc', method: 'POST', cf: {},
+      headers: { get: k => ({ 'content-type': 'application/grpc' })[k.toLowerCase()] ?? null },
+      body,
+      fetcher: {
+        connect(a) {
+          const h2 = typeof a === 'string' ? a : a.hostname, p2 = (a && a.port) || 443;
+          let ctrl = null; const written = [];
+          const readable = new ReadableStream({ start(c) { ctrl = c; } });
+          const writable = new WritableStream({ write(ch) { written.push(Uint8Array.from(ch instanceof ArrayBuffer ? new Uint8Array(ch) : ch)); } });
+          const s = { host: h2, port: p2, readable, writable, written, opened: Promise.resolve(), _enqueue: b => { try { ctrl.enqueue(b); } catch {} }, close() { try { ctrl.close(); } catch {} } };
+          connectLog.push(s); return s;
+        }
+      }
+    };
+  };
+  try {
+    // 正路径单帧
+    connectLog = []; __pairs.length = 0;
+    const gPayload = Uint8Array.from([9, 8, 7]);
+    const gres = await WK.default.fetch(gReq('grpc-e2e.org', [XH_GFR(vlessFrame(G_UUID, 'grpc-e2e.org', 443, gPayload))]), {}, { waitUntil() {} });
+    await sleep(150);
+    const gsock = connectLog.find(s => s.host === 'grpc-e2e.org');
+    check('worker gRPC 正路径：建连目标正确', !!gsock && gsock.port === 443, connectLog.map(s => s.host + ':' + s.port).join(','));
+    check('worker gRPC 正路径：上行剥帧后仅 payload 透传远端', !!gsock && eqU8(catU8(gsock.written), gPayload), gsock ? JSON.stringify(Array.from(catU8(gsock.written))) : 'no sock');
+    check('worker gRPC 正路径：下行 CT=application/grpc + grpc-status:0', (gres.headers.get('content-type') || '') === 'application/grpc' && gres.headers.get('grpc-status') === '0', (gres.headers.get('content-type') || '') + '/' + gres.headers.get('grpc-status'));
+    gsock._enqueue(G_REPLY); await sleep(60); gsock.close();
+    const gfull = catU8(await readAllU8(gres.body));
+    const gd = XH_GDEC(gfull);
+    check('worker gRPC 正路径：下行封帧且解帧 = [0,0]++应答', gd.out.length >= 1 && eqU8(catU8(gd.out), G_EXPECT), JSON.stringify(Array.from(catU8(gd.out))));
+    check('worker gRPC 正路径：下行无残留 leftover', gd.rest.length === 0, 'rest=' + gd.rest.length);
+
+    // 正路径半包（跨块重组）
+    connectLog = []; __pairs.length = 0;
+    const hPayload = Uint8Array.from([5, 5, 5, 5, 5, 5]);
+    const hFrame = XH_GFR(vlessFrame(G_UUID, 'grpc-half.org', 443, hPayload));
+    const hres = await WK.default.fetch(gReq('grpc-half.org', [hFrame.subarray(0, 7), hFrame.subarray(7)]), {}, { waitUntil() {} });
+    await sleep(150);
+    const hsock = connectLog.find(s => s.host === 'grpc-half.org');
+    check('worker gRPC 正路径：半包跨块重组后 payload 完整透传', !!hsock && eqU8(catU8(hsock.written), hPayload), hsock ? JSON.stringify(Array.from(catU8(hsock.written))) : 'no sock');
+    hsock._enqueue(G_REPLY); await sleep(60); hsock.close();
+    const hd = XH_GDEC(catU8(await readAllU8(hres.body)));
+    check('worker gRPC 正路径：半包下行仍可解帧', hd.out.length >= 1 && eqU8(catU8(hd.out), G_EXPECT), 'got=' + JSON.stringify(Array.from(catU8(hd.out))) + ' rest=' + hd.rest.length);
+  } finally {
+    globalThis.fetch = gFetch;
+  }
+
+  // ---- 模式判定 XH_isGrpc（CT 前缀 + padding 特征排除）----
+  const mkH = (ct, padHdr) => { const m = {}; if (ct !== null) m['content-type'] = ct; if (padHdr) m[padHdr[0]] = padHdr[1]; return { get: k => (m[k.toLowerCase()] ?? null) }; };
+  const mkR = (ct, url = 'https://w.test/x', padHdr = null) => ({ url, headers: mkH(ct, padHdr) });
+  const PDH = G_UUID.slice(1, 7), PDK = '_' + G_UUID.slice(25, 31);
+  if (typeof WK.__setPD === 'function') WK.__setPD(PDH, PDK);
+  check('gRPC 判定：CT=application/grpc 无 padding → true', XH_isGrpc(mkR('application/grpc')) === true);
+  check('gRPC 判定：CT=application/grpc + padding 头 → false（走 xHTTP）', XH_isGrpc(mkR('application/grpc', 'https://w.test/x', [PDH, 'x'])) === false, 'PDH=' + PDH);
+  check('gRPC 判定：CT=application/grpc + padding URL 参数 → false', XH_isGrpc(mkR('application/grpc', 'https://w.test/x?' + PDK + '=zzz')) === false);
+  check('gRPC 判定：CT=application/octet-stream → false', XH_isGrpc(mkR('application/octet-stream')) === false);
+  check('gRPC 判定：无 CT（packet-up）→ false', XH_isGrpc(mkR(null)) === false);
+  if (typeof WK.__setPD === 'function') WK.__setPD('', '');
+}
+
 // ================= 汇总 =================
 console.log('\n===== 汇总 =====');
 const fail = results.filter(r => !r.ok);
 console.log(`共 ${results.length} 项，失败 ${fail.length} 项`);
 if (fail.length) { console.log('失败项:'); fail.forEach(f => console.log(' - ' + f.name)); }
+// CI 门禁：有失败即非 0 退出码（失败 0 项保持 exit 0）
+if (fail.length) process.exitCode = 1;

@@ -1,22 +1,26 @@
-# 混淆/测试工具链（本地）
+# 依赖目录（不入库；但 package.json / package-lock.json 入库，保证混淆构建链可复现）
 node_modules/
-package.json
-package-lock.json
 
 # 本地开发与回归产物
 _worker_test.mjs
 *.tmp
+_red*.txt
 
 # 上游参考快照（仅本地对比用，不入库）
 _ref_edgetunnel.tmp
 
-# 混淆产物验证临时目录
+# 本地验证/证据目录（含红绿证据、诊断脚本、备份）
 _verify/
 
-# 内部补丁脚本
+# 会话工作区记忆目录（本地 AI 会话产物，不入库）
+.workbuddy-ai/
+
+# 回归脚本运行时生成物（harness 会写入仓库根目录）
+_snippets_xh.mjs
+
+# 内部补丁脚本（一次性手术脚本，已执行完毕）
 _surgery_*.cjs
 _worker_*_patch.cjs
-_obfuscate.mjs
 
 # 独立子项目（另行管理）
 pages-sub-page/
