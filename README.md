@@ -1,13 +1,13 @@
 # GrainTCP 双端代理（Workers + Snippets）
 
 <!-- doccheck:baseline
-harness_total=334
-file.worker.js.bytes=408464
-file.worker.js.sha256_12=fc2bd26422cb
+harness_total=347
+file.worker.js.bytes=411064
+file.worker.js.sha256_12=800c4f73288a
 file.snippets.js.bytes=31463
 file.snippets.js.sha256_12=312c664da700
-file.worker.obf.js.bytes=947054
-file.worker.obf.js.sha256_12=59a91ede4153
+file.worker.obf.js.bytes=959689
+file.worker.obf.js.sha256_12=fcfe450f6bca
 -->
 
 基于 [ToiCF/GrainTCP](https://github.com/ToiCF/GrainTCP) 内核与 [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) 生态兼容约定的 Cloudflare VLESS 代理，提供两个部署形态：
@@ -19,7 +19,7 @@ file.worker.obf.js.sha256_12=59a91ede4153
 | `worker.obf.js` | Cloudflare **Workers** | **Workers 的部署件**（`wrangler.jsonc` 的 `main` 指向它），与明文版行为一致（同一回归套件验证） |
 | `wrangler.jsonc` / `schema.sql` | Workers | wrangler 部署配置 / D1 建表脚本 |
 | `GrainTCP.js` | 参考 | 上游内核参考快照（部署文件内已内嵌，无需单独部署） |
-| `test_harness.mjs` | 本地 | 334 项离线回归测试（Node ≥ 22，实测 v22.22.2 全绿） |
+| `test_harness.mjs` | 本地 | 347 项离线回归测试（Node ≥ 22，实测 v22.22.2 全绿） |
 
 两文件核心行为对齐：同一套 VLESS 握手、路径语法、伪装体系与订阅契约，客户端无感知切换。
 
@@ -93,8 +93,10 @@ npm i -g wrangler
 wrangler d1 create graintcp          # 记下 database_id 填回配置
 wrangler d1 execute graintcp --file=schema.sql   # 上面第 2 步的四条建表语句存成 schema.sql
 wrangler secret put UUID
-node _predeploy_check.mjs   # 部署前预检（产物同源 / snippets ≤32KB / 产物存在 / 文档数据自查），任一不过即拒绝部署
+node _predeploy_check.mjs   # 部署前预检（产物同源 / snippets ≤32KB / 产物存在 / 部署件体积 / 文档数据自查），任一不过即拒绝部署
 npm run doccheck            # 文档数据自查（文档声明值 vs 实际；上一行的 predeploy 已自动带跑）
+node _doccheck.mjs --update # 刷新基准块。只允许刷新「基准块 + 由基准块机械派生的数字/哈希副本」，禁止改措辞
+                            # （脚本逐行断言：归一化后除数字/哈希外必须逐字符相同，违反则回滚该文件并 exit 2）
 wrangler deploy
 ```
 
@@ -125,8 +127,8 @@ wrangler deploy
 | `RANDOM_HOST` / `HOSTS` | 订阅域名随机化：开关（`1`/`true`）+ 域名池（逗号分隔，支持 `*` 通配为 3~16 位随机串；只接受 `[a-z0-9.*-]`，非法值丢弃）。**配错会直接断网，非自有域名勿开** | 空（关闭） |
 | `TLS_FRAGMENT` | 节点串透出 TLS 分片参数：`shadowrocket` → `1,40-60,30-50,tlshello`；`happ` → `3,1,tlshello`。**需客户端支持且服务端同版本，否则别开** | 空（关闭） |
 | `SUB_UDP` / `SUB_XUDP` / `SUB_TLS13` / `SUB_APPEND_TYPE` | 发给第三方转换后端的 4 个开关参数（udp / xudp / tls13 / append_type） | 全 `true` |
-| `URL` | **A-8 伪装页 / 反代真实站点**（默认 `''` 关闭，保持未知路径 404）：`nginx` → 内置 nginx 欢迎页；`1101` → Cloudflare 1101 错误页；其他值（如 `example.com` 或 `https://example.com`）→ 反代该站点：`http://` **强制升级为 `https://`**、**必须过 `_extHostSafe` SSRF 闸门**（内网/回环 → 回落 404）、**反代目标另过内部域名后缀黑名单**（`localhost`/`.localhost`/`.local`/`.internal`/`.lan`/`.home`/`.localdomain`/`.intranet`/`.corp`，仅加在反代路径）、剥离 `Location`/`Set-Cookie`、响应头白名单拷贝（仅 `content-type`/`cache-control`/`etag`/`last-modified`）、**响应体上限 1MiB**（超限回落 404）。**仅 Workers 版** | 空（关闭） |
-| `CHAIN_PROXY` | **A-9 链式代理**开关（`1`/`true` 启用）：启用后**带 `Upgrade: websocket`** 的 `GET /video/<密文>` 会解密出全局代理并强制走它（普通 GET 不走）。密文 = `base64url( iv[12] ‖ AES-GCM(JSON{type,hostname,port,username,password}) )`，密钥 = `HKDF-SHA256(UUID, salt='chain', info='chain')`；`type` 白名单 `socks5/http/https/turn/sstp`；**解密出的 `hostname` 必须过 `_extHostSafe`**，否则静默回落。**仅 Workers 版**（Snippets 无 `pCfg`，放不下） | 空（关闭） |
+| `URL` | **A-8 伪装页 / 反代真实站点**（默认 `''` 关闭，保持未知路径 404）：`nginx` → 内置 nginx 欢迎页；`1101` → Cloudflare 1101 错误页；其他值（如 `example.com` 或 `https://example.com`）→ 反代该站点：`http://` **强制升级为 `https://`**、**必须过 `_extHostSafe` SSRF 闸门**（内网/回环 → 回落 404）、**内部域名后缀黑名单**（`localhost`/`.localhost`/`.local`/`.internal`/`.lan`/`.home`/`.localdomain`/`.intranet`/`.corp`）、**DoH 预解析 + 封禁段校验**（解析不出、或任一解析结果命中内网/回环/链路本地 → 拒绝）、剥离 `Location`/`Set-Cookie`、响应头白名单拷贝（仅 `content-type`/`cache-control`/`etag`/`last-modified`）、**响应体上限 1MiB**（超限回落 404）。**仅 Workers 版**，且为 **env-only**（`URL` 不在面板 `save_config` 白名单内，不可由面板写入） | 空（关闭） |
+| `CHAIN_PROXY` | **A-9 链式代理**开关（`1`/`true` 启用）：启用后**带 `Upgrade: websocket`** 的 `GET /video/<密文>` 会解密出全局代理并强制走它（普通 GET 不走）。密文 = `base64url( iv[12] ‖ AES-GCM(JSON{v,t,type,hostname,port,username,password}) )`，其中 `v` 必须为 `1`、`t` 为签发 Unix 秒（服务端 >30 天判过期 → 回落）；密钥 = `HKDF-SHA256(UUID, salt='chain', info='chain')`；`type` 白名单 `socks5/http/https/turn/sstp`；**解密出的 `hostname` 必须过 `_extHostSafe` + DoH 预解析**，否则静默回落。**仅 Workers 版**（Snippets 无 `pCfg`，放不下） | 空（关闭） |
 
 完整 53 键以代码内 `getSafeEnv` 调用为准（`CONCUR`、`KEY`、`UUID_REFRESH`、`OBS_ENABLED`、`OBS_MIN_LEVEL` 等少数键直接读 `env.*`，不在此列）；D1 config 表中的键与环境变量同名，面板「保存配置」即写入。
 
@@ -136,10 +138,10 @@ wrangler deploy
 >
 > **A-9 链式代理（默认关闭，仅 Workers）**：需 `CHAIN_PROXY=1`，且仅接受**带 `Upgrade: websocket`** 的请求（VLESS over WS 握手本身即带 Upgrade，正常用法不受影响）。Snippets 版不识别 `/video/`，该路径按普通路径解析并回落默认 ProxyIP（安全无副作用）。
 >
-> **⚠️ 已知限制（安全复核 F3/F4，均为平台限制或设计取舍，非可修缺陷）**：
-> - **F3（A-8 反代 DNS 层）**：Workers 无法在 `fetch` 前预解析域名，`URL` 若被配成「解析到内网 / `169.254.169.254`」的域名（DNS rebinding / 内部域名），后缀黑名单只能拦常见内部后缀、**拦不住任意可解析到内网的公网域名**。`URL` 属**管理员配置**（非攻击者可控）——**请只配置可信外部站点**。
-> - **F4-a（A-9 密文）**：密文无时间戳/序号，**不防重放**（同一密文可反复使用）；AES-GCM 的 IV 唯一性依赖**生成方**保证，服务端不校验。缓解：默认关闭 + 需 `Upgrade: websocket` + HKDF 派生密钥。
-> - **F4-b（A-11 `admin/check`）**：出网探测所用 `TlsClient` **不校验证书链**（第三方压缩实现如此），存在 MITM 面；因目标固定为 `cloudflare.com:443` 且仅管理员可触发，影响可控。
+> **⚠️ 已知限制与生成约束（安全复核 F3/F4）**：
+> - **F3（A-8 反代 DNS 层）**：已加 **DoH 预解析 + 封禁段校验**（fail-closed：解析不出、或任一解析结果命中内网/回环/链路本地 → 拒绝）。但**纯 DNS rebinding（TTL=0，先回公网再回内网）在本平台不可防** —— `cf.resolveOverride` 经查证**只对「与 Worker 同 zone」的主机生效**，无法钉死第三方域名解析。`URL` 属**管理员配置**（env-only、非攻击者可控）——**请只配置可信外部站点**。
+> - **F4-a（A-9 密文）生成约束**：密文须由**本方式**生成 —— `AES-GCM` + **每次随机 12 字节 IV**（`crypto.getRandomValues(new Uint8Array(12))`）；**切勿复用 IV**（GCM 下 IV 重用会导致明文可恢复且可伪造）。明文须含 `v:1` 与 `t`（Unix 秒，服务端 >30 天判过期 → 回落）。**密文等价于上游代理凭据：泄露后须轮换 UUID 或派生盐**。服务端**不防重放**（无状态，无法判 IV 是否重复）。
+> - **F4-b（A-11 `admin/check`）不可信声明**：所用 `TlsClient` **不校验证书链**（第三方压缩实现如此）→ **输出不保证真实性，仅供排查参考**（已加 ip/loc 格式闸门：非法格式 → `success:false`，非法 loc → 清空）。该请求不含任何凭据，MITM 最坏后果是出口 IP/loc 误报；如需更强保证，可考虑**双来源交叉验证**（本平台内唯一不改 TLS 栈的加固方向）。
 
 **可观测性开关**（直读 `env.*`，**不支持 D1 存储**，改完须重新部署）：
 
@@ -208,9 +210,10 @@ wrangler deploy
 
 `worker.obf.js` 由 javascript-obfuscator 生成：保留顶层导出与全部行为（`renameGlobals` 关闭），本地标识符十六进制化 + 字符串数组化；另含 rc4 字符串编码与控制流平坦化。
 
-- **`worker.obf.js`（947054B ≈ 925KB）——Workers 的部署件**：Dashboard 直接粘贴，或用 wrangler（`main` 已指向它）。Workers 无 32KB 限制，混淆不设防。
+- **`worker.obf.js`（959689B ≈ 937KB）——Workers 的部署件**：Dashboard 直接粘贴，或用 wrangler（`main` 已指向它）。Workers 无 32KB 限制，混淆不设防。
+  - ⚠️ **别被 937KB 这个数字误导**：Workers 单脚本限额按**未压缩** bundle 计（官方 `Worker size (uncompressed)` = **64 MiB**，Free 与 Paid 相同），本项目占 **1.43%**、余 63.08MiB。压缩后（gzip 374.1KB / brotli 343.8KB）**官方明确不设限**，只作传输参考。`_predeploy_check.mjs` 的 `[4/5]` 会同时打印原始 / gzip / brotli 三个数字与余量。
 - ⚠️ **混淆产物字节不可复现**：构建器启用了 `controlFlowFlattening` / `stringArrayRotate` / `stringArrayShuffle`，带随机性，**同一份源码每次构建的字节与体积都会漂移**（实测三次：845231B → 853000B → 850949B）。因此**不能用哈希判断"产物与源码是否一致"**；唯一有效的门禁是**行为等价**——把产物复制成 `worker.js`/`snippets.js` 放进临时目录，跑同一套回归，**0 容忍——白名单为空，任何红一律 `exit≠0`**。**每次构建后都必须重跑。**<!-- doccheck:allow: 混淆产物漂移示例（历史实测三次值），刻意保留 -->
-- 明文/混淆交叉验证：`worker.obf.js` 通过同一套 **334 项**回归。
+- 明文/混淆交叉验证：`worker.obf.js` 通过同一套 **347 项**回归。
 
 ## 本地测试
 
@@ -218,10 +221,10 @@ wrangler deploy
 node test_harness.mjs
 ```
 
-离线桩环境（Node ≥ 22，实测 v22.22.2）跑 **334 项**回归：路径语法矩阵、addrParser、WS 中继流、xHTTP 双端全链路（含**下行数据回传**）、gRPC 帧编解码（首帧嗅探/封帧/半包/粘包/畸形/零长 + 正路径 E2E + 模式判定）、`/proxyip=` 7 种路径形态（含编码与尾随斜杠）、`XH_HS` 首包就绪边界、非法百分号编码健壮性、padding/TXT 池/测速拦截/UDP 拒绝、sstp/TURN 建连、订阅哨兵重建、转换器回源、D1 缓存与降频、getCustomIPs 并行、运营商识别（cnIspCode 白名单）/ 本地随机优选 IP 库（CF-CIDR + 失败回退）、伪装页/反代（SSRF 闸门 + Location/Set-Cookie 剥离 + 响应头白名单）、链式代理（HKDF 派生 + AES-GCM + SSRF 闸门 + Upgrade 判定）、安全复核残留修复（F1 反代 text 响应体 1MiB 上限 / F2 日志 `err` 白名单 + URL 抹除 / F3 内部域名后缀黑名单）、路由冒烟。
+离线桩环境（Node ≥ 22，实测 v22.22.2）跑 **347 项**回归：路径语法矩阵、addrParser、WS 中继流、xHTTP 双端全链路（含**下行数据回传**）、gRPC 帧编解码（首帧嗅探/封帧/半包/粘包/畸形/零长 + 正路径 E2E + 模式判定）、`/proxyip=` 7 种路径形态（含编码与尾随斜杠）、`XH_HS` 首包就绪边界、非法百分号编码健壮性、padding/TXT 池/测速拦截/UDP 拒绝、sstp/TURN 建连、订阅哨兵重建、转换器回源、D1 缓存与降频、getCustomIPs 并行、运营商识别（cnIspCode 白名单）/ 本地随机优选 IP 库（CF-CIDR + 失败回退）、伪装页/反代（SSRF 闸门 + Location/Set-Cookie 剥离 + 响应头白名单）、链式代理（HKDF 派生 + AES-GCM + SSRF 闸门 + Upgrade 判定）、安全复核残留修复（F1 反代 text 响应体 1MiB 上限 / F2 日志 `err` 白名单 + URL 抹除 / F3 内部域名后缀黑名单）、第十二轮加固（F3 DoH 预解析 + 封禁段校验 / F4-a 密文 `v`+`t` 版本与 30 天过期 / F4-b admin/check 格式闸门）、路由冒烟。
 
-> 红绿对照（**152 项时代的历史基线**，不是当前口径）：对修复前的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑**当时的 152 项 harness** → **36 项失败（36/152）**；修复后当前 **334/334 全绿**。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
-> ⚠️ **当前 334 项口径下红基线不可复现**：`1496ffb` 早于 gRPC 功能（P1-9），当前 harness 的导出清单依赖该提交不存在的符号（如 `XH_GCHK`），在其上运行会直接 `SyntaxError`，一条用例都跑不到。红基线只能在**当时的 152 项口径**下复现；本项目的红绿对照一律按「152 项时代历史基线（36/152）」理解。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
+> 红绿对照（**152 项时代的历史基线**，不是当前口径）：对修复前的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑**当时的 152 项 harness** → **36 项失败（36/152）**；修复后当前 **347/347 全绿**。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
+> ⚠️ **当前 347 项口径下红基线不可复现**：`1496ffb` 早于 gRPC 功能（P1-9），当前 harness 的导出清单依赖该提交不存在的符号（如 `XH_GCHK`），在其上运行会直接 `SyntaxError`，一条用例都跑不到。红基线只能在**当时的 152 项口径**下复现；本项目的红绿对照一律按「152 项时代历史基线（36/152）」理解。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
 
 ## 安全须知
 

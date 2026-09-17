@@ -60,6 +60,18 @@ globalThis.fetch = async (url, opts) => {
   return realFetch(url, opts);
 };
 
+// F3 测试桩：把「非 DoH」handler 包成「DoH 一律回公网 A/AAAA，其余交给 handler」。
+// dohIps 传内网 IP（如 ['10.0.0.1']）模拟「解析到内网」；传 [] 模拟「解析失败/空」。
+const wrapDoh = (handler, dohIps = ['93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946']) => async (u, o) => {
+  const s = String((u && u.url) || u);
+  if (/dns-query|\/resolve/.test(s) && /[?&]name=/.test(s)) {
+    const isV6 = /type=AAAA/i.test(s);
+    const list = (dohIps || []).filter(ip => String(ip).includes(':') === isV6);
+    return new RealResponse(JSON.stringify({ Answer: list.map(ip => ({ type: isV6 ? 28 : 1, data: ip })) }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+  }
+  return handler(u, o);
+};
+
 // fake TCP socket（字节流，支持 BYOB）
 let connectLog = [];
 function makeTargetSocket(host, port) {
@@ -149,7 +161,7 @@ const extractUuid = (line) => (line.match(/UUID="([^"]+)"/) || [0, SNIP_UUID_FAL
 
 async function loadWorker() {
   const src = readFileSync(DIR + 'worker.js', 'utf8');
-  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_GUP, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\nexport const __b7={go2s5List:typeof _go2s5List=="function"?_go2s5List:null,go2s5Hit:typeof _go2s5Hit=="function"?_go2s5Hit:null,extHostSafe:typeof _extHostSafe=="function"?_extHostSafe:null,tryCon:typeof tryCon=="function"?tryCon:null,resetGO2S5:()=>{try{_GO2S5=null}catch(e){}},parseHosts:typeof _parseHosts=="function"?_parseHosts:null,fyShuffle:typeof _fyShuffle=="function"?_fyShuffle:null,XH_GUP:typeof XH_GUP=="function"?XH_GUP:null,GMAX:typeof GMAX=="number"?GMAX:null};\nexport const __b6={obs:typeof obs=="function"?obs:null,obsRedact:typeof obsRedact=="function"?obsRedact:null,obsScrub:typeof obsScrub=="function"?obsScrub:null,routeEnum:typeof routeEnum=="function"?routeEnum:null,obsReset:typeof _obsReset=="function"?_obsReset:null,tgStreak:typeof tgStreak=="function"?tgStreak:null,tgDegradedUntil:typeof tgDegradedUntil=="function"?tgDegradedUntil:null,tgFailBump:typeof tgFailBump=="function"?tgFailBump:null,tgFailClear:typeof tgFailClear=="function"?tgFailClear:null,sendTgMsg:typeof sendTgMsg=="function"?sendTgMsg:null,pushDashboard:typeof pushDashboard=="function"?pushDashboard:null,sweepLoginFail:typeof _sweepLoginFail=="function"?_sweepLoginFail:null};\nexport const __b8={ispCode:typeof ispCode=="function"?ispCode:null,resolveIspCode:typeof resolveIspCode=="function"?resolveIspCode:null,localRandomIPs:typeof localRandomIPs=="function"?localRandomIPs:null,cidrList:typeof _cidrList=="function"?_cidrList:null,cidrCacheReset:typeof _cidrCacheReset=="function"?_cidrCacheReset:null,randIP:typeof _randIPFromCIDR=="function"?_randIPFromCIDR:null,whitelist:typeof ISP_WHITELIST!="undefined"?ISP_WHITELIST:null,cidrUrl:typeof ISP_CIDR_URL!="undefined"?ISP_CIDR_URL:null,builtin:typeof ISP_CIDR_BUILTIN!="undefined"?ISP_CIDR_BUILTIN:null,ports:typeof CF_PORTS!="undefined"?CF_PORTS:null};\nexport const __b9={chainProxyCfg:typeof chainProxyCfg=="function"?chainProxyCfg:null,chainKey:typeof _chainKey=="function"?_chainKey:null,chainDecrypt:typeof _chainDecrypt=="function"?_chainDecrypt:null,b64uEncode:typeof _b64uEncode=="function"?_b64uEncode:null,camouflageReverse:typeof _camouflageReverse=="function"?_camouflageReverse:null,nginxPage:typeof nginxPage=="function"?nginxPage:null,cf1101Page:typeof cf1101Page=="function"?cf1101Page:null,CHAIN_TYPES:typeof _CHAIN_TYPES!="undefined"?_CHAIN_TYPES:null,CAM_HDR_ALLOW:typeof _CAM_HDR_ALLOW!="undefined"?_CAM_HDR_ALLOW:null};\n';
+  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_GUP, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\nexport const __b7={go2s5List:typeof _go2s5List=="function"?_go2s5List:null,go2s5Hit:typeof _go2s5Hit=="function"?_go2s5Hit:null,extHostSafe:typeof _extHostSafe=="function"?_extHostSafe:null,tryCon:typeof tryCon=="function"?tryCon:null,resetGO2S5:()=>{try{_GO2S5=null}catch(e){}},parseHosts:typeof _parseHosts=="function"?_parseHosts:null,fyShuffle:typeof _fyShuffle=="function"?_fyShuffle:null,XH_GUP:typeof XH_GUP=="function"?XH_GUP:null,GMAX:typeof GMAX=="number"?GMAX:null};\nexport const __b6={obs:typeof obs=="function"?obs:null,obsRedact:typeof obsRedact=="function"?obsRedact:null,obsScrub:typeof obsScrub=="function"?obsScrub:null,routeEnum:typeof routeEnum=="function"?routeEnum:null,obsReset:typeof _obsReset=="function"?_obsReset:null,tgStreak:typeof tgStreak=="function"?tgStreak:null,tgDegradedUntil:typeof tgDegradedUntil=="function"?tgDegradedUntil:null,tgFailBump:typeof tgFailBump=="function"?tgFailBump:null,tgFailClear:typeof tgFailClear=="function"?tgFailClear:null,sendTgMsg:typeof sendTgMsg=="function"?sendTgMsg:null,pushDashboard:typeof pushDashboard=="function"?pushDashboard:null,sweepLoginFail:typeof _sweepLoginFail=="function"?_sweepLoginFail:null};\nexport const __b8={ispCode:typeof ispCode=="function"?ispCode:null,resolveIspCode:typeof resolveIspCode=="function"?resolveIspCode:null,localRandomIPs:typeof localRandomIPs=="function"?localRandomIPs:null,cidrList:typeof _cidrList=="function"?_cidrList:null,cidrCacheReset:typeof _cidrCacheReset=="function"?_cidrCacheReset:null,randIP:typeof _randIPFromCIDR=="function"?_randIPFromCIDR:null,whitelist:typeof ISP_WHITELIST!="undefined"?ISP_WHITELIST:null,cidrUrl:typeof ISP_CIDR_URL!="undefined"?ISP_CIDR_URL:null,builtin:typeof ISP_CIDR_BUILTIN!="undefined"?ISP_CIDR_BUILTIN:null,ports:typeof CF_PORTS!="undefined"?CF_PORTS:null};\nexport const __b9={chainProxyCfg:typeof chainProxyCfg=="function"?chainProxyCfg:null,chainKey:typeof _chainKey=="function"?_chainKey:null,chainDecrypt:typeof _chainDecrypt=="function"?_chainDecrypt:null,b64uEncode:typeof _b64uEncode=="function"?_b64uEncode:null,camouflageReverse:typeof _camouflageReverse=="function"?_camouflageReverse:null,nginxPage:typeof nginxPage=="function"?nginxPage:null,cf1101Page:typeof cf1101Page=="function"?cf1101Page:null,CHAIN_TYPES:typeof _CHAIN_TYPES!="undefined"?_CHAIN_TYPES:null,CAM_HDR_ALLOW:typeof _CAM_HDR_ALLOW!="undefined"?_CAM_HDR_ALLOW:null};\nexport const __b10={adminCheckResult:typeof _adminCheckResult=="function"?_adminCheckResult:null,camResolveSafe:typeof _camResolveSafe=="function"?_camResolveSafe:null};\n';
   writeFileSync(DIR + '_worker_test.mjs', patched);
   return import(pathToFileURL(DIR + '_worker_test.mjs').href);}
 
@@ -2212,7 +2224,8 @@ console.log('\n===== 第九轮 A-8 伪装页/反代 + A-9 链式代理 =====');
     };
   };
   const call9 = (req, env) => WK.default.fetch(req, env || {}, ctx9);
-  const withFetch9 = async (fn, mock) => { const save = globalThis.fetch; globalThis.fetch = mock; try { return await fn(); } finally { globalThis.fetch = save; } };
+  // F3 起：A-8 域名反代先经 DoH 预解析 → 测试桩默认把 DoH 回公网 IP，其余交给 mock
+  const withFetch9 = async (fn, mock) => { const save = globalThis.fetch; globalThis.fetch = wrapDoh(mock); try { return await fn(); } finally { globalThis.fetch = save; } };
 
   // ---- A-8：伪装页 / 反代（默认关闭，仅 env.URL 显式配置时生效）----
   {
@@ -2267,16 +2280,20 @@ console.log('\n===== 第九轮 A-8 伪装页/反代 + A-9 链式代理 =====');
   const B9 = WK.__b9 || {};
   const hasC = !!(B9.chainProxyCfg && B9.chainKey && B9.b64uEncode);
   if (hasC) {
+    const _saveF9 = globalThis.fetch;
+    globalThis.fetch = wrapDoh(async () => new RealResponse('', { status: 200 }));   // F3：A-9 域名经 DoH 预解析 → 公网
     const UUID9 = '06b65903-406d-4a41-8463-6fd5c0ee7798';
     try { WK.setUUID(UUID9); } catch { }
     const enc9 = new TextEncoder();
     // 独立复刻「外部链接生成方」：按文档契约自行 HKDF 派生 + AES-GCM 加密（worker 侧只持 decrypt 能力，故不能复用其 key）
+    // F4-a 起：默认注入 v:1 + 当前时间戳（30 天有效），专项用例可显式覆盖 v/t
     const mkSecret = async (obj) => {
+      const full = { v: 1, t: Math.floor(Date.now() / 1000), ...obj };
       const base = await crypto.subtle.importKey('raw', enc9.encode(UUID9), 'HKDF', false, ['deriveBits']);
       const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: enc9.encode('chain'), info: enc9.encode('chain') }, base, 256);
       const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt']);
       const iv = new Uint8Array(12).fill(9);
-      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc9.encode(JSON.stringify(obj))));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc9.encode(JSON.stringify(full))));
       return B9.b64uEncode(new Uint8Array([...iv, ...ct]));
     };
     const mkUp = (upg) => ({ headers: { get: k => (String(k).toLowerCase() === 'upgrade' ? (upg || null) : null) } });
@@ -2303,6 +2320,7 @@ console.log('\n===== 第九轮 A-8 伪装页/反代 + A-9 链式代理 =====');
     }
     check('A-9 无 Upgrade 的普通 GET → 不走链式分支（即使密文合法）', (await B9.chainProxyCfg(mkUp(null), '/video/' + S_OK, { CHAIN_PROXY: '1' })) === null);
     check('A-9 CHAIN_PROXY 未配 → 分支不启用', (await B9.chainProxyCfg(mkUp('websocket'), '/video/' + S_OK, {})) === null);
+    globalThis.fetch = _saveF9;
   } else {
     for (let i = 0; i < 8; i++) check('A-9 链式代理（过期产物无导出 → 降级失败）', false, 'chainProxyCfg 未导出');
   }
@@ -2324,7 +2342,8 @@ console.log('\n===== 第十一轮 F1/F2/F3 低危残留修复 =====');
     };
   };
   const call11 = (req, env) => WK.default.fetch(req, env || {}, ctx11);
-  const withFetch11 = async (fn, mock) => { const save = globalThis.fetch; globalThis.fetch = mock; try { return await fn(); } finally { globalThis.fetch = save; } };
+  // F3 起：A-8 域名反代先经 DoH 预解析 → 测试桩默认把 DoH 回公网 IP，其余交给 mock
+  const withFetch11 = async (fn, mock) => { const save = globalThis.fetch; globalThis.fetch = wrapDoh(mock); try { return await fn(); } finally { globalThis.fetch = save; } };
   const B9r = WK.__b9 || {};
   const reqStub = { method: 'GET', headers: new Headers(), body: null };
   const urlStub = new URL('https://w.test/p');
@@ -2400,6 +2419,128 @@ console.log('\n===== 第十一轮 F1/F2/F3 低危残留修复 =====');
     check('F3 单元 .corp（过期产物无导出 → 降级失败）', false, 'camouflageReverse 未导出');
     check('F3 单元 .lan（过期产物无导出 → 降级失败）', false, 'camouflageReverse 未导出');
     check('F3 对照 公网域名（过期产物无导出 → 降级失败）', false, 'camouflageReverse 未导出');
+  }
+}
+
+// ================= 17. 第十二轮：F3 DoH 预解析 + F4-a 密文版本/过期 + F4-b admin/check 格式（含第十三轮回退） =================
+console.log('\n===== 第十二/十三轮 F3/F4-a/F4-b + URL 回退 =====');
+{
+  const ctx12 = { waitUntil(p) { try { Promise.resolve(p).catch(() => { }); } catch { } } };
+  const mkReq12 = ({ url, method = 'GET', headers = {}, body = null, cf = { country: 'CN', city: 'T' } }) => {
+    const h = {}; for (const [k, v] of Object.entries(headers)) h[k.toLowerCase()] = v;
+    return {
+      url, method,
+      headers: { get: k => (k.toLowerCase() in h ? h[k.toLowerCase()] : null) },
+      cf, body,
+      json: async () => { try { return JSON.parse(body); } catch { return null; } },
+      text: async () => (typeof body === 'string' ? body : ''),
+      fetcher: { connect() { throw new Error('no-connect'); } }
+    };
+  };
+  const call12 = (req, env) => WK.default.fetch(req, env || {}, ctx12);
+  const withFetch12 = async (fn, impl) => { const save = globalThis.fetch; globalThis.fetch = impl; try { return await fn(); } finally { globalThis.fetch = save; } };
+  const B9_12 = WK.__b9 || {};
+  const B10 = WK.__b10 || {};
+
+  // ---- F3：A-8 反代目标的 DoH 预解析 + 封禁段校验 ----
+  {
+    let called = false;
+    const r = await withFetch12(
+      () => call12(mkReq12({ url: 'https://w.test/p' }), { URL: 'https://evil.example.com' }),
+      wrapDoh(async () => { called = true; return new RealResponse('X', { status: 200, headers: { 'content-type': 'text/html' } }); }, ['10.0.0.1']));
+    check('F3 A-8：域名 DoH 解析到内网 10.0.0.1 → 拒绝 404（且未发起反代）', r.status === 404 && !called, 'status=' + r.status + ' called=' + called);
+  }
+  {
+    let called = false;
+    const r = await withFetch12(
+      () => call12(mkReq12({ url: 'https://w.test/p' }), { URL: 'https://example.com' }),
+      wrapDoh(async () => { called = true; return new RealResponse('PUB', { status: 200, headers: { 'content-type': 'text/html' } }); }));
+    check('F3 A-8：域名解析到公网 IP → 放行（200）', r.status === 200 && called, 'status=' + r.status + ' called=' + called);
+  }
+  {
+    let called = false;
+    const r = await withFetch12(
+      () => call12(mkReq12({ url: 'https://w.test/p' }), { URL: 'https://nowhere.example.com' }),
+      wrapDoh(async () => { called = true; return new RealResponse('X', { status: 200 }); }, []));
+    check('F3 A-8：DoH 解析失败/空 → 拒绝 404（fail-closed）', r.status === 404 && !called, 'status=' + r.status + ' called=' + called);
+  }
+
+  // ---- 第十三轮回退：save_config 不接受 URL（保持 env-only；URL 不在 ALLOWED_KEYS）----
+  // 原第十二轮「配置时刻预解析校验」已随能力扩张一并回退（运行时 _camouflageReverse 的 DoH 校验才是真正生效的部分）。
+  {
+    const mkDB13 = () => { const store = new Map(); return { store, prepare(sql) { const ins = /INSERT/i.test(sql); const all = async () => ({ results: ins ? [] : [...store].map(([k, v]) => ({ key: k, value: v })) }); const run = (a) => { if (ins && a && a.length >= 2) store.set(String(a[0]), String(a[1])); return Promise.resolve({}); }; const bound = (a) => ({ bind: (...a2) => bound(a2), all, run: () => run(a) }); return { bind: (...a) => bound(a), all, run: () => run([]) }; } }; };
+    const UA13 = 'Mozilla/5.0 (R13 Test)';
+    const db = mkDB13();
+    const env = { DB: db };
+    try { WK.cfgCacheReset(); } catch { }
+    const lr = await call12(mkReq12({ url: 'https://w.test/?flag=login', method: 'POST', headers: { 'User-Agent': UA13, 'Content-Type': 'application/json' }, body: JSON.stringify({ pwd: 'abc' }) }), env);
+    const ck = (lr.headers.get('set-cookie') || '').split(';')[0] || '';
+    // 同批提交一个合法键（PS）与 URL：PS 落库、URL 被忽略 —— 证明循环确实在跑（不是整段跳过）
+    const r = await withFetch12(
+      () => call12(mkReq12({ url: 'https://w.test/?flag=save_config', method: 'POST', headers: { 'User-Agent': UA13, 'Content-Type': 'application/json', Cookie: ck }, body: JSON.stringify({ PS: 'ok-note', URL: 'https://example.com' }) }), env),
+      wrapDoh(async () => new RealResponse('', { status: 200 })));
+    const j = await r.json().catch(() => ({}));
+    check('回退：save_config 忽略 URL（不在 ALLOWED_KEYS）→ 不落库；同批合法键 PS 正常落库',
+      lr.status === 200 && ck.startsWith('auth=') && j.status === 'ok' && db.store.get('PS') === 'ok-note' && !db.store.has('URL'),
+      'login=' + lr.status + ' store=' + JSON.stringify([...db.store]));
+    try { WK.cfgCacheReset(); } catch { }
+  }
+
+  // ---- F3：A-9 解密出的域名同样过 DoH 预解析 ----
+  const hasC12 = !!(B9_12.chainProxyCfg && B9_12.b64uEncode);
+  if (hasC12) {
+    const UUID12 = '06b65903-406d-4a41-8463-6fd5c0ee7798';
+    try { WK.setUUID(UUID12); } catch { }
+    const enc12 = new TextEncoder();
+    const mkSecret12 = async (obj) => {
+      const base = await crypto.subtle.importKey('raw', enc12.encode(UUID12), 'HKDF', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: enc12.encode('chain'), info: enc12.encode('chain') }, base, 256);
+      const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt']);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc12.encode(JSON.stringify(obj))));
+      return B9_12.b64uEncode(new Uint8Array([...iv, ...ct]));
+    };
+    const mkUp12 = (u) => ({ headers: { get: k => (String(k).toLowerCase() === 'upgrade' ? (u || null) : null) } });
+    const now = Math.floor(Date.now() / 1000);
+
+    // F3：A-9 目标域名 DoH 解析到内网 → 回落 null
+    {
+      const sec = await mkSecret12({ v: 1, t: now, type: 'socks5', hostname: 'evil.example.com', port: 1080 });
+      const cfg = await withFetch12(() => B9_12.chainProxyCfg(mkUp12('websocket'), '/video/' + sec, { CHAIN_PROXY: '1' }), wrapDoh(async () => new RealResponse('', { status: 200 }), ['10.0.0.1']));
+      check('F3 A-9：解密出的域名 DoH 解析到内网 → 回落 null（SSRF 闸门）', cfg === null, 'cfg=' + JSON.stringify(cfg));
+    }
+
+    // ---- F4-a：密文版本 + 过期 ----
+    const _saveF12 = globalThis.fetch;
+    globalThis.fetch = wrapDoh(async () => new RealResponse('', { status: 200 }));
+    try {
+      const ok = await B9_12.chainProxyCfg(mkUp12('websocket'), '/video/' + await mkSecret12({ v: 1, t: now, type: 'socks5', hostname: 'proxy.example.com', port: 1080 }), { CHAIN_PROXY: '1' });
+      check('F4-a 合法 v=1 + 未过期 → 正常走链式', !!ok && ok.gP && ok.gP.type === 'socks5', JSON.stringify(ok && ok.gP));
+      const noT = await B9_12.chainProxyCfg(mkUp12('websocket'), '/video/' + await mkSecret12({ v: 1, type: 'socks5', hostname: 'proxy.example.com', port: 1080 }), { CHAIN_PROXY: '1' });
+      check('F4-a 缺 t → 回落 null（有效期字段必填）', noT === null);
+      const expired = await B9_12.chainProxyCfg(mkUp12('websocket'), '/video/' + await mkSecret12({ v: 1, t: now - 2592001, type: 'socks5', hostname: 'proxy.example.com', port: 1080 }), { CHAIN_PROXY: '1' });
+      check('F4-a t 超过 30 天 → 回落 null', expired === null);
+      const badVer = await B9_12.chainProxyCfg(mkUp12('websocket'), '/video/' + await mkSecret12({ v: 2, t: now, type: 'socks5', hostname: 'proxy.example.com', port: 1080 }), { CHAIN_PROXY: '1' });
+      check('F4-a v≠1 → 回落 null（版本闸门）', badVer === null);
+    } finally { globalThis.fetch = _saveF12; }
+  } else {
+    check('F3 A-9 DoH 预解析（过期产物无导出 → 降级失败）', false, 'chainProxyCfg 未导出');
+    for (let i = 0; i < 4; i++) check('F4-a 链式版本/过期（过期产物无导出 → 降级失败）', false, 'chainProxyCfg 未导出');
+  }
+
+  // ---- F4-b：admin/check 结果格式闸门（纯函数单测；成功路径需真 TLS 栈，离线桩不可达）----
+  if (B10.adminCheckResult) {
+    const g = B10.adminCheckResult;
+    const a = g('1.2.3.4', 'US', 'socks5://p:1080', 0);
+    check('F4-b ip 合法 IPv4 → success:true + 原样返回 ip/loc', a.success === true && a.ip === '1.2.3.4' && a.loc === 'US', JSON.stringify(a));
+    const b = g('not-an-ip', 'US', 'socks5://p:1080', 0);
+    check('F4-b ip 非法格式 → success:false + "trace 响应格式异常"', b.success === false && b.error === 'trace 响应格式异常', JSON.stringify(b));
+    const c = g('1.2.3.4', 'usa', 'socks5://p:1080', 0);
+    check('F4-b loc 非法（非 2 位大写）→ 清空不外显', c.success === true && c.loc === '', JSON.stringify(c));
+    const d = g('2606:4700::1', 'CN', 'socks5://p:1080', 0);
+    check('F4-b ip 合法 IPv6 字面量 → 接受', d.success === true && d.ip === '2606:4700::1', JSON.stringify(d));
+  } else {
+    for (let i = 0; i < 4; i++) check('F4-b admin/check 格式闸门（过期产物无导出 → 降级失败）', false, 'adminCheckResult 未导出');
   }
 }
 

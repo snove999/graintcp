@@ -1678,6 +1678,31 @@ const _camHostBlocked = (h) => {
     const x = String(h || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
     return x === 'localhost' || _CAM_BLOCK_SUFFIX.some(sfx => x.endsWith(sfx));
 };
+// F3：DoH 预解析 + 封禁段校验（复用既有 _dohQ 通道 + _extHostSafe 位掩码校验，不新造）。
+// Workers 无法在 fetch 前钉死第三方域名解析（cf.resolveOverride 仅同 zone 生效），此为本平台内最实质的收敛。
+// fail-closed：解析不出 / 任一解析结果命中封禁段 → 拒绝（不猜、不放行）。字面量 IP 直接复用闸门（不做 DoH）。
+const _camResolveSafe = async (hostname) => {
+    const h = String(hostname || '').replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (h.includes(':') || _v4(h)) return _extHostSafe(h).ok;      // 字面量 IP：调用方已过 _extHostSafe，这里复核
+    let ips = [];
+    try {
+        const [a4, a6] = await Promise.all([_dohQ(h, 'A'), _dohQ(h, 'AAAA')]);
+        ips = [...a4, ...a6].map(x => String(x).trim()).filter(Boolean);
+    } catch (e) { return false; }
+    if (!ips.length) return false;                                 // 解析不出 → 拒绝（fail-closed）
+    for (const ip of ips) { if (!_extHostSafe(ip).ok) return false; }   // 任一解析结果命中封禁段 → 拒绝
+    return true;
+};
+// F4-b：/admin/check 结果整形（纯函数，便于离线单测）。
+// 所用 TLS 实现不校验证书链 → 输出不保证真实性；此处只做**格式闸门**：ip 必须是合法 IPv4/IPv6 字面量，否则判响应异常。
+function _adminCheckResult(ip, loc, tag, t0) {
+    const _ip = String(ip || '').trim();
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(_ip) && !/^[0-9a-f:]+$/i.test(_ip))
+        return { success: false, proxy: tag, error: 'trace 响应格式异常', responseTime: Date.now() - t0 };
+    let _loc = String(loc || '').trim();
+    if (_loc && !/^[A-Z]{2}$/.test(_loc)) _loc = '';      // 非法 loc 直接清空，不外显
+    return { success: true, proxy: tag, ip: _ip, loc: _loc, responseTime: Date.now() - t0 };
+}
 // 反代：归一化（http:// 强制升级为 https://）+ SSRF 闸门 + 头剥离 + 白名单拷贝；任何失败返回 null（调用方回 404）
 async function _camouflageReverse(rawUrl, r, url, host) {
     try {
@@ -1688,6 +1713,7 @@ async function _camouflageReverse(rawUrl, r, url, host) {
         if (u.protocol !== 'https:') return null;
         if (!_extHostSafe(u.hostname).ok) return null;          // ★ 硬约束#1：SSRF 闸门（复用既有校验，不新造）
         if (_camHostBlocked(u.hostname)) return null;           // ★ F3：内部域名后缀黑名单（仅 A-8 路径）
+        if (!(await _camResolveSafe(u.hostname))) return null;  // ★ F3：DoH 预解析 + 封禁段校验（fail-closed）
         const h = new Headers(r.headers);
         h.set('Host', u.host); h.set('Referer', u.origin); h.set('Origin', u.origin);
         const init = { method: r.method, headers: h, redirect: 'manual' };
@@ -1746,12 +1772,16 @@ async function chainProxyCfg(req, path, env) {
     if (!m) return null;
     try {
         const obj = JSON.parse(await _chainDecrypt(m[1].replace(/\/+$/, ''), CFG.id));
+        if (Number(obj && obj.v) !== 1) throw new Error('bad ver');                                  // ★ F4-a：版本闸门（为未来轮换留路）
+        const _ct = Number(obj && obj.t);
+        if (!Number.isFinite(_ct) || Date.now() / 1000 - _ct > 2592000) throw new Error('expired');  // ★ F4-a：30 天有效期（无 t / 超期 → 回落）
         const type = String((obj && obj.type) || '').toLowerCase();
         const hostname = String((obj && obj.hostname) || '');
         const port = Number(obj && obj.port);
         if (!_CHAIN_TYPES.includes(type)) throw new Error('bad type');                        // ★ 硬约束#6
         if (!hostname || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('bad host/port');
         if (!_extHostSafe(hostname).ok) throw new Error('ssrf');                              // ★ 硬约束#1：SSRF 闸门
+        if (!(await _camResolveSafe(hostname))) throw new Error('ssrf-dns');                  // ★ F3：DoH 预解析 + 封禁段校验
         return { pIP: null, s5: null, enS: null, turn: null, gP: _chainGp(type, hostname, port, obj.username, obj.password), order: ['gP'] };
     } catch (e) { return null; }                                // 解密/解析失败 → 静默回落
 }
@@ -2767,7 +2797,8 @@ export default {
           }
           // 未取到 ip= → 明确报「TLS 出网不可达/被拒」，不静默返回 success:false 而不给原因
           if (!_ckIp) return _cj({ success: false, proxy: _ckTag, error: '未取到 cloudflare.com:443/cdn-cgi/trace 响应（TLS 出网不可达或被代理拒绝）', responseTime: Date.now() - _ckT0 });
-          return _cj({ success: true, proxy: _ckTag, ip: _ckIp, loc: _ckLoc, responseTime: Date.now() - _ckT0 });
+          // F4-b：格式闸门 + loc 清洗（见 _adminCheckResult 注释；TLS 不校验证书链 → 输出不保证真实性）
+          return _cj(_adminCheckResult(_ckIp, _ckLoc, _ckTag, _ckT0));
         } catch (e) {
           // TlsClient 在协议错误时抛数字哨兵（如 0），直接 String 会得到无意义的 "0" → 归一为可读文案
           const _em = (e && e.message) ? String(e.message) : ('TLS/连接失败：' + String(e));
