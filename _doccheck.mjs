@@ -90,6 +90,10 @@ const STALE = [
   { v: '61 行', why: '旧 snippets.js 行数基准' },
   { v: '11627', why: '旧 snippets.js 最长行基准' },
   { v: '347', why: '旧回归项数（Snippets 平台适配前）' },
+  { v: '32463', why: '旧 snippets.js 字节数（NET/TS 诊断修复前）' },
+  { v: 'bc0b35ba5d7f', why: '旧 snippets.js sha256 前缀' },
+  { v: '67 行', why: '旧 snippets.js 行数基准' },
+  { v: '370', why: '旧回归项数（NET/TS 诊断修复前）' },
 ];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

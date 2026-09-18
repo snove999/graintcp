@@ -1,11 +1,11 @@
 # GrainTCP 双端代理（Workers + Snippets）
 
 <!-- doccheck:baseline
-harness_total=370
+harness_total=374
 file.worker.js.bytes=411064
 file.worker.js.sha256_12=800c4f73288a
-file.snippets.js.bytes=32463
-file.snippets.js.sha256_12=bc0b35ba5d7f
+file.snippets.js.bytes=32711
+file.snippets.js.sha256_12=d34ed45edfb4
 file.worker.obf.js.bytes=959689
 file.worker.obf.js.sha256_12=fcfe450f6bca
 -->
@@ -15,11 +15,11 @@ file.worker.obf.js.sha256_12=fcfe450f6bca
 | 文件 | 部署目标 | 定位 |
 |---|---|---|
 | `worker.js` | Cloudflare **Workers** | 全功能版明文源码：管理面板、D1 持久化、TG 用量推送、订阅聚合 |
-| `snippets.js` | Cloudflare **Snippets**（付费计划规则引擎） | 轻量版明文源码：受官方 32KB / 5ms / 2MB / 子请求配额限制，专注代理与订阅本体，无面板。**Snippets 的唯一部署件**（当前 32463B，余量 305B） |
+| `snippets.js` | Cloudflare **Snippets**（付费计划规则引擎） | 轻量版明文源码：受官方 32KB / 5ms / 2MB / 子请求配额限制，专注代理与订阅本体，无面板。**Snippets 的唯一部署件**（当前 32711B，余量 57B） |
 | `worker.obf.js` | Cloudflare **Workers** | **Workers 的部署件**（`wrangler.jsonc` 的 `main` 指向它），与明文版行为一致（同一回归套件验证） |
 | `wrangler.jsonc` / `schema.sql` | Workers | wrangler 部署配置 / D1 建表脚本 |
 | `GrainTCP.js` | 参考 | 上游内核参考快照（部署文件内已内嵌，无需单独部署） |
-| `test_harness.mjs` | 本地 | 370 项离线回归测试（Node ≥ 22，实测 v22.22.2 / v24.19.0 全绿） |
+| `test_harness.mjs` | 本地 | 374 项离线回归测试（Node ≥ 22，实测 v22.22.2 / v24.19.0 全绿） |
 
 两文件核心行为对齐：同一套 VLESS 握手、路径语法、伪装体系与订阅契约，客户端无感知切换。
 
@@ -199,14 +199,16 @@ wrangler deploy
 
 ## Snippets 部署
 
-1. 前提：**付费计划**（Free 无 Snippets）。官方限额（[developers.cloudflare.com/rules/snippets](https://developers.cloudflare.com/rules/snippets/)）：**包体 32KB、CPU 5ms、内存 2MB、无环境变量/绑定/日志**；**子请求配额 Pro 2 / Business 3 / Enterprise 5**（重定向链每跳各计 1 次）。`snippets.js` 当前 32463B，余量 305B。
+1. 前提：**付费计划**（Free 无 Snippets）。官方限额（[developers.cloudflare.com/rules/snippets](https://developers.cloudflare.com/rules/snippets/)）：**包体 32KB、CPU 5ms、内存 2MB、无环境变量/绑定/日志**；**子请求配额 Pro 2 / Business 3 / Enterprise 5**（重定向链每跳各计 1 次）。`snippets.js` 当前 32711B，余量 57B。
 2. 规则 → Snippets → 新建，粘贴 `snippets.js` 全文，绑定到你的 hostname（如 `*.{你的域}/*`），Deploy 即生效（该域名必须是橙云代理记录）。
 3. 配置全部在文件头 8 行：
-   - 第 1 行：`UUID`、`SUB_PWD`（订阅密码路径）、`ADF`（推广行过滤正则）、**`SRQ`（你的计划的子请求配额，默认 2=Pro）**
-   - 第 5–11 行：`PIP`（默认 ProxyIP，支持 `域名!txt` TXT 池）、`SUB`（优选生成器）、`SUBAPI`、`SUBINI`、`SBV11/12`（singbox 模板）、ECH 参数
-4. 订阅地址：`https://{域名}/{SUB_PWD}` 或 `/sub?uuid={UUID}`；代理入口语法与 Workers 一致（含 gRPC：`Content-Type: application/grpc` 且无 padding 特征时按 Xray gun 帧剥帧/封帧）。
+   - 第 1 行：`UUID`、`SUB_PWD`（订阅密码路径）、`ADF`（推广行过滤正则）、**`SRQ`（你的计划的子请求配额，默认 2=Pro）**、**`NET`（base64 订阅默认传输：`ws` 或 `xhttp`）**
+   - 第 6–12 行：`PIP`（默认 ProxyIP，支持 `域名!txt` TXT 池）、`SUB`（优选生成器）、`SUBAPI`、`SUBINI`、`SBV11/12`（singbox 模板）、ECH 参数
+4. 订阅地址：`https://{域名}/{SUB_PWD}` 或 `/sub?uuid={UUID}`；追加 `&net=xhttp` / `&net=ws` 可单次覆盖 `NET`。xhttp 节点固定 `mode=stream-one`（Snippets 无跨请求状态，GET 下行不可用），仅 Xray 系客户端（v2rayN / v2rayNG / Shadowrocket 等）支持；clash / sing-box 等经转换器的输出恒为 ws（转换器回源 `flag=true` 忽略 `net`）。代理入口语法与 Workers 一致（含 gRPC：`Content-Type: application/grpc` 且无 padding 特征时按 Xray gun 帧剥帧/封帧）。
 
 **`SRQ` 子请求配额门控（Snippets 独有，按官方配额表设计）**：线上实测 `connect()` 与 `fetch()` 合并计数，超限即 Error 1202。默认 `SRQ=2`（Pro）下：`/proxyip=域名` 走「直连 1 + 反代 connect 1」，不做任何 DoH；`域名!txt` 显式池化时跳过直连（TXT 1 + connect 1）。`SRQ≥3` 时 `/proxyip=域名` 自动先查 TXT 池再连（对齐 EDT）；`SRQ≥4` 时 TURN 目标解析追加 AAAA。订阅侧按同一请求内已用次数决定是否回源 ECH DoH、是否再试备用 DoH / 备用 singbox 模板，保证不超配额。`proxyip` 为字面 IP 时永不发起 DoH。
+
+**编辑器 TS 诊断说明**：VS Code 对 `.js` 开启 checkJs 时会报 `IdentityTransformStream` / `WebSocketPair` / `Uint8Array.fromBase64` / `Response({webSocket})` 未知，这是 TypeScript 内置 lib 没有 Cloudflare Workers 运行时类型所致，不影响运行；安装 `@cloudflare/workers-types` 或关闭 checkJs 即可消除。其余可修的诊断（布尔/数组类型收窄、`charCodeAt(0)`、spread 参数）已修。
 
 **Snippets 侧其余适配**：xHTTP 上行背压阈值 256KB、gRPC 重组缓冲上限 512KB（2MB 内存）；WS 侧 cmd=2（UDP）直接关闭；早数据 `Uint8Array.fromBase64` 解码失败回退手动解码（不再 500）；GET 下行（stream-up / packet-up 的 downlink）返回 404（无跨请求状态）。
 
@@ -217,7 +219,7 @@ wrangler deploy
 - **`worker.obf.js`（959689B ≈ 937KB）——Workers 的部署件**：Dashboard 直接粘贴，或用 wrangler（`main` 已指向它）。Workers 无 32KB 限制，混淆不设防。
   - ⚠️ **别被 937KB 这个数字误导**：Workers 单脚本限额按**未压缩** bundle 计（官方 `Worker size (uncompressed)` = **64 MiB**，Free 与 Paid 相同），本项目占 **1.43%**、余 63.08MiB。压缩后（gzip 374.1KB / brotli 343.8KB）**官方明确不设限**，只作传输参考。`_predeploy_check.mjs` 的 `[4/5]` 会同时打印原始 / gzip / brotli 三个数字与余量。
 - ⚠️ **混淆产物字节不可复现**：构建器启用了 `controlFlowFlattening` / `stringArrayRotate` / `stringArrayShuffle`，带随机性，**同一份源码每次构建的字节与体积都会漂移**（实测三次：845231B → 853000B → 850949B）。因此**不能用哈希判断"产物与源码是否一致"**；唯一有效的门禁是**行为等价**——把产物复制成 `worker.js`/`snippets.js` 放进临时目录，跑同一套回归，**0 容忍——白名单为空，任何红一律 `exit≠0`**。**每次构建后都必须重跑。**<!-- doccheck:allow: 混淆产物漂移示例（历史实测三次值），刻意保留 -->
-- 明文/混淆交叉验证：`worker.obf.js` 通过同一套 **370 项**回归。
+- 明文/混淆交叉验证：`worker.obf.js` 通过同一套 **374 项**回归。
 
 ## 本地测试
 
@@ -225,10 +227,10 @@ wrangler deploy
 node test_harness.mjs
 ```
 
-离线桩环境（Node ≥ 22，实测 v22.22.2 / v24.19.0）跑 **370 项**回归：路径语法矩阵、addrParser、WS 中继流、xHTTP 双端全链路（含**下行数据回传**）、gRPC 帧编解码（首帧嗅探/封帧/半包/粘包/畸形/零长 + 正路径 E2E + 模式判定）、`/proxyip=` 7 种路径形态（含编码与尾随斜杠）、`XH_HS` 首包就绪边界、非法百分号编码健壮性、padding/TXT 池/测速拦截/UDP 拒绝、sstp/TURN 建连、订阅哨兵重建、转换器回源、D1 缓存与降频、getCustomIPs 并行、运营商识别（cnIspCode 白名单）/ 本地随机优选 IP 库（CF-CIDR + 失败回退）、伪装页/反代（SSRF 闸门 + Location/Set-Cookie 剥离 + 响应头白名单）、链式代理（HKDF 派生 + AES-GCM + SSRF 闸门 + Upgrade 判定）、安全复核残留修复（F1 反代 text 响应体 1MiB 上限 / F2 日志 `err` 白名单 + URL 抹除 / F3 内部域名后缀黑名单）、第十二轮加固（F3 DoH 预解析 + 封禁段校验 / F4-a 密文 `v`+`t` 版本与 30 天过期 / F4-b admin/check 格式闸门）、Snippets 平台适配（WS 侧 cmd=2 拒绝 / 早数据 fromBase64 回退 / A-6 `g` 前缀与 turn= sstp= 查询参数族 / gRPC 紧凑版正路径 + 半包 + 粘包 + 非法帧长 / `SRQ` 子请求配额门控：TXT 池、字面 IP 免 DoH、订阅侧 ECH 与备用模板按剩余配额回源）、路由冒烟。
+离线桩环境（Node ≥ 22，实测 v22.22.2 / v24.19.0）跑 **374 项**回归：路径语法矩阵、addrParser、WS 中继流、xHTTP 双端全链路（含**下行数据回传**）、gRPC 帧编解码（首帧嗅探/封帧/半包/粘包/畸形/零长 + 正路径 E2E + 模式判定）、`/proxyip=` 7 种路径形态（含编码与尾随斜杠）、`XH_HS` 首包就绪边界、非法百分号编码健壮性、padding/TXT 池/测速拦截/UDP 拒绝、sstp/TURN 建连、订阅哨兵重建、转换器回源、D1 缓存与降频、getCustomIPs 并行、运营商识别（cnIspCode 白名单）/ 本地随机优选 IP 库（CF-CIDR + 失败回退）、伪装页/反代（SSRF 闸门 + Location/Set-Cookie 剥离 + 响应头白名单）、链式代理（HKDF 派生 + AES-GCM + SSRF 闸门 + Upgrade 判定）、安全复核残留修复（F1 反代 text 响应体 1MiB 上限 / F2 日志 `err` 白名单 + URL 抹除 / F3 内部域名后缀黑名单）、第十二轮加固（F3 DoH 预解析 + 封禁段校验 / F4-a 密文 `v`+`t` 版本与 30 天过期 / F4-b admin/check 格式闸门）、Snippets 平台适配（WS 侧 cmd=2 拒绝 / 早数据 fromBase64 回退 / A-6 `g` 前缀与 turn= sstp= 查询参数族 / gRPC 紧凑版正路径 + 半包 + 粘包 + 非法帧长 / `SRQ` 子请求配额门控：TXT 池、字面 IP 免 DoH、订阅侧 ECH 与备用模板按剩余配额回源）、路由冒烟。
 
-> 红绿对照（**152 项时代的历史基线**，不是当前口径）：对修复前的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑**当时的 152 项 harness** → **36 项失败（36/152）**；修复后当前 **370/370 全绿**。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
-> ⚠️ **当前 370 项口径下红基线不可复现**：`1496ffb` 早于 gRPC 功能（P1-9），当前 harness 的导出清单依赖该提交不存在的符号（如 `XH_GCHK`），在其上运行会直接 `SyntaxError`，一条用例都跑不到。红基线只能在**当时的 152 项口径**下复现；本项目的红绿对照一律按「152 项时代历史基线（36/152）」理解。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
+> 红绿对照（**152 项时代的历史基线**，不是当前口径）：对修复前的代码（`git show 1496ffb:worker.js` / `git show 1496ffb:snippets.js`，即修复提交 `b8f5846` 的父提交）跑**当时的 152 项 harness** → **36 项失败（36/152）**；修复后当前 **374/374 全绿**。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
+> ⚠️ **当前 374 项口径下红基线不可复现**：`1496ffb` 早于 gRPC 功能（P1-9），当前 harness 的导出清单依赖该提交不存在的符号（如 `XH_GCHK`），在其上运行会直接 `SyntaxError`，一条用例都跑不到。红基线只能在**当时的 152 项口径**下复现；本项目的红绿对照一律按「152 项时代历史基线（36/152）」理解。 <!-- doccheck:allow: 红基线为 152 项时代历史口径，刻意保留 -->
 
 ## 安全须知
 

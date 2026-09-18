@@ -455,6 +455,15 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     check('snippets 占位 trojan 不残留', !text.includes('trojan://'), 'yes');
     check('snippets 推广地址已过滤', !text.includes('Join.my.Telegram') && !text.includes('t.me'), 'yes');
     check('snippets 订阅返回 200', res.status === 200, String(res.status));
+    check('snippets NET=ws 默认：重建节点 type=ws 且无 mode=', /type=ws&/.test(text) && !text.includes('mode='), text.split('\n')[1]?.slice(0, 120));
+    const resX = await SN.default.fetch(stubRequest('https://w.test/sub?uuid=' + snipUuid + '&net=xhttp', {}), undefined, { waitUntil() {} });
+    const textX = Buffer.from(await resX.text(), 'base64').toString('utf8');
+    const lineX = textX.split('\n').find(l => l.includes('212.147.249.131')) || '';
+    check('snippets ?net=xhttp：重建节点 type=xhttp + mode=stream-one + path/host/sni 完整', /type=xhttp&/.test(lineX) && lineX.includes('mode=stream-one') && lineX.includes('sni=w.test') && lineX.includes('host=w.test') && /path=[^&#]+/.test(lineX), lineX.slice(0, 160));
+    check('snippets ?net=xhttp：透传外来节点不被改写', textX.includes('vless://11111111-2222-4333-8444-555555555555@1.2.3.4:443'), 'yes');
+    const resF = await SN.default.fetch(stubRequest('https://w.test/sub?uuid=' + snipUuid + '&net=xhttp&flag=true', {}), undefined, { waitUntil() {} });
+    const textF = Buffer.from(await resF.text(), 'base64').toString('utf8');
+    check('snippets flag=true（转换器回源）忽略 net=xhttp，恒 ws', /type=ws&/.test(textF) && !textF.includes('xhttp'), textF.split('\n')[1]?.slice(0, 100));
   } catch (e) { check('snippets 生成器契约测试', false, e.message); }
 
   // worker：/123456（默认订阅密码）走路径B
@@ -2648,7 +2657,7 @@ console.log('\n===== Snippets 平台适配 =====');
 
   // 18.5 子请求配额 SRQ（官方：Pro 2 / Business 3 / Enterprise 5）：SRQ≥3 时 /proxyip=域名 先查 TXT 池（EDT 对齐）
   try {
-    const src3 = SRC.replace(/,SRQ=2;/, ',SRQ=3;');
+    const src3 = SRC.replace(/,SRQ=2,/, ',SRQ=3,');
     if (src3 === SRC) throw new Error('SRQ 锚点缺失');
     writeFileSync(DIR + '_snippets_srq3.mjs', src3);
     const SN3 = await import(pathToFileURL(DIR + '_snippets_srq3.mjs').href);
