@@ -52,7 +52,7 @@ import { join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
-const DOCS = ['docs/DEPLOY_VERIFY.md', 'README.md'];
+const DOCS = ['docs/DEPLOY_VERIFY.md', 'README.md', 'docs/REFERENCE.md'];
 const FILE_NAMES = ['worker.obf.js', 'worker.js', 'snippets.js', 'test_harness.mjs'];
 const BASELINE_FILES = ['worker.js', 'snippets.js', 'worker.obf.js'];
 const BASELINE_OPEN = '<!-- doccheck:baseline';
@@ -96,6 +96,14 @@ const STALE = [
   { v: '32711', why: '旧 snippets.js 字节数（404 文案统一前）' },
   { v: 'd34ed45edfb4', why: '旧 snippets.js sha256 前缀' },
   { v: '68 行', why: '旧 snippets.js 行数基准' },
+  { v: '32651', why: '旧 snippets.js 字节数（第十五轮前）' },
+  { v: '84f059cb81d1', why: '旧 snippets.js sha256 前缀' },
+  { v: '374', why: '旧回归项数（第十五轮前）' },
+  { v: '959689', why: '旧 worker.obf.js 字节数（第十五轮前）' },
+  { v: 'fcfe450f6bca', why: '旧 worker.obf.js sha256 前缀' },
+  { v: '800c4f73288a', why: '旧 worker.js sha256 前缀' },
+  { v: '411064', why: '旧 worker.js 字节数（NET 前）' },
+  { v: '11226', why: '旧 snippets.js 最长行基准' },
 ];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -397,7 +405,8 @@ export function runDocCheck({ log = console.log } = {}) {
 //   ② 其余数字串 → '#'
 // 用 ≥8 而非 ≥6 是为了避免把 6 位纯数字（如 959689）走 hex 分支、与 3 位数字（925）比较时
 // 因「归一化结果不同」而误报 —— 两者统一走 ② 都会变成 '#'。
-export const normDigits = (s) => String(s).replace(/[0-9a-fA-F]{8,}/g, '#H').replace(/\d+/g, '#');
+// ⓪ 先把「数字+B（字节单位）」归一（如 1022615B：7 位数字 + B 恰好 8 个 hex 字符，会被 ① 误当哈希）
+export const normDigits = (s) => String(s).replace(/\d+(?=B(?![0-9a-zA-Z]))/g, '#').replace(/[0-9a-fA-F]{8,}/g, '#H').replace(/\d+/g, '#');
 
 // 逐行守卫：断言 before/after 归一化后完全相同；返回 null 表示通过，否则返回失败描述
 function guardLine(rel, lineNo, before, after) {

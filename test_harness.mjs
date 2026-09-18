@@ -161,7 +161,7 @@ const extractUuid = (line) => (line.match(/UUID="([^"]+)"/) || [0, SNIP_UUID_FAL
 
 async function loadWorker() {
   const src = readFileSync(DIR + 'worker.js', 'utf8');
-  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_GUP, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\nexport const __b7={go2s5List:typeof _go2s5List=="function"?_go2s5List:null,go2s5Hit:typeof _go2s5Hit=="function"?_go2s5Hit:null,extHostSafe:typeof _extHostSafe=="function"?_extHostSafe:null,tryCon:typeof tryCon=="function"?tryCon:null,resetGO2S5:()=>{try{_GO2S5=null}catch(e){}},parseHosts:typeof _parseHosts=="function"?_parseHosts:null,fyShuffle:typeof _fyShuffle=="function"?_fyShuffle:null,XH_GUP:typeof XH_GUP=="function"?XH_GUP:null,GMAX:typeof GMAX=="number"?GMAX:null};\nexport const __b6={obs:typeof obs=="function"?obs:null,obsRedact:typeof obsRedact=="function"?obsRedact:null,obsScrub:typeof obsScrub=="function"?obsScrub:null,routeEnum:typeof routeEnum=="function"?routeEnum:null,obsReset:typeof _obsReset=="function"?_obsReset:null,tgStreak:typeof tgStreak=="function"?tgStreak:null,tgDegradedUntil:typeof tgDegradedUntil=="function"?tgDegradedUntil:null,tgFailBump:typeof tgFailBump=="function"?tgFailBump:null,tgFailClear:typeof tgFailClear=="function"?tgFailClear:null,sendTgMsg:typeof sendTgMsg=="function"?sendTgMsg:null,pushDashboard:typeof pushDashboard=="function"?pushDashboard:null,sweepLoginFail:typeof _sweepLoginFail=="function"?_sweepLoginFail:null};\nexport const __b8={ispCode:typeof ispCode=="function"?ispCode:null,resolveIspCode:typeof resolveIspCode=="function"?resolveIspCode:null,localRandomIPs:typeof localRandomIPs=="function"?localRandomIPs:null,cidrList:typeof _cidrList=="function"?_cidrList:null,cidrCacheReset:typeof _cidrCacheReset=="function"?_cidrCacheReset:null,randIP:typeof _randIPFromCIDR=="function"?_randIPFromCIDR:null,whitelist:typeof ISP_WHITELIST!="undefined"?ISP_WHITELIST:null,cidrUrl:typeof ISP_CIDR_URL!="undefined"?ISP_CIDR_URL:null,builtin:typeof ISP_CIDR_BUILTIN!="undefined"?ISP_CIDR_BUILTIN:null,ports:typeof CF_PORTS!="undefined"?CF_PORTS:null};\nexport const __b9={chainProxyCfg:typeof chainProxyCfg=="function"?chainProxyCfg:null,chainKey:typeof _chainKey=="function"?_chainKey:null,chainDecrypt:typeof _chainDecrypt=="function"?_chainDecrypt:null,b64uEncode:typeof _b64uEncode=="function"?_b64uEncode:null,camouflageReverse:typeof _camouflageReverse=="function"?_camouflageReverse:null,nginxPage:typeof nginxPage=="function"?nginxPage:null,cf1101Page:typeof cf1101Page=="function"?cf1101Page:null,CHAIN_TYPES:typeof _CHAIN_TYPES!="undefined"?_CHAIN_TYPES:null,CAM_HDR_ALLOW:typeof _CAM_HDR_ALLOW!="undefined"?_CAM_HDR_ALLOW:null};\nexport const __b10={adminCheckResult:typeof _adminCheckResult=="function"?_adminCheckResult:null,camResolveSafe:typeof _camResolveSafe=="function"?_camResolveSafe:null};\n';
+  const patched = src + '\nexport { pCfg, parseAddressPort, addrParser, setUUID, CFG, ws as _ws, mkK, parseTurnProxyConfig, getSafeEnv, cfgCacheReset, incrementDailyStats, getCustomIPs, XH_HS, XH_GCHK, XH_GFR, XH_GDEC, XH_GUP, XH_isGrpc, XH_pdFeat };\nexport const __setPD=(h,k)=>{XH_PDH=h;XH_PDK=k};\nexport const __b7={go2s5List:typeof _go2s5List=="function"?_go2s5List:null,go2s5Hit:typeof _go2s5Hit=="function"?_go2s5Hit:null,extHostSafe:typeof _extHostSafe=="function"?_extHostSafe:null,tryCon:typeof tryCon=="function"?tryCon:null,resetGO2S5:()=>{try{_GO2S5=null}catch(e){}},parseHosts:typeof _parseHosts=="function"?_parseHosts:null,fyShuffle:typeof _fyShuffle=="function"?_fyShuffle:null,XH_GUP:typeof XH_GUP=="function"?XH_GUP:null,GMAX:typeof GMAX=="number"?GMAX:null};\nexport const __b6={obs:typeof obs=="function"?obs:null,obsRedact:typeof obsRedact=="function"?obsRedact:null,obsScrub:typeof obsScrub=="function"?obsScrub:null,routeEnum:typeof routeEnum=="function"?routeEnum:null,obsReset:typeof _obsReset=="function"?_obsReset:null,tgStreak:typeof tgStreak=="function"?tgStreak:null,tgDegradedUntil:typeof tgDegradedUntil=="function"?tgDegradedUntil:null,tgFailBump:typeof tgFailBump=="function"?tgFailBump:null,tgFailClear:typeof tgFailClear=="function"?tgFailClear:null,sendTgMsg:typeof sendTgMsg=="function"?sendTgMsg:null,pushDashboard:typeof pushDashboard=="function"?pushDashboard:null,sweepLoginFail:typeof _sweepLoginFail=="function"?_sweepLoginFail:null};\nexport const __b8={ispCode:typeof ispCode=="function"?ispCode:null,resolveIspCode:typeof resolveIspCode=="function"?resolveIspCode:null,localRandomIPs:typeof localRandomIPs=="function"?localRandomIPs:null,cidrList:typeof _cidrList=="function"?_cidrList:null,cidrCacheReset:typeof _cidrCacheReset=="function"?_cidrCacheReset:null,randIP:typeof _randIPFromCIDR=="function"?_randIPFromCIDR:null,whitelist:typeof ISP_WHITELIST!="undefined"?ISP_WHITELIST:null,cidrUrl:typeof ISP_CIDR_URL!="undefined"?ISP_CIDR_URL:null,builtin:typeof ISP_CIDR_BUILTIN!="undefined"?ISP_CIDR_BUILTIN:null,ports:typeof CF_PORTS!="undefined"?CF_PORTS:null};\nexport const __b9={chainProxyCfg:typeof chainProxyCfg=="function"?chainProxyCfg:null,chainKey:typeof _chainKey=="function"?_chainKey:null,chainDecrypt:typeof _chainDecrypt=="function"?_chainDecrypt:null,b64uEncode:typeof _b64uEncode=="function"?_b64uEncode:null,camouflageReverse:typeof _camouflageReverse=="function"?_camouflageReverse:null,nginxPage:typeof nginxPage=="function"?nginxPage:null,cf1101Page:typeof cf1101Page=="function"?cf1101Page:null,CHAIN_TYPES:typeof _CHAIN_TYPES!="undefined"?_CHAIN_TYPES:null,CAM_HDR_ALLOW:typeof _CAM_HDR_ALLOW!="undefined"?_CAM_HDR_ALLOW:null};\nexport const __b10={adminCheckResult:typeof _adminCheckResult=="function"?_adminCheckResult:null,camResolveSafe:typeof _camResolveSafe=="function"?_camResolveSafe:null};\n';
   writeFileSync(DIR + '_worker_test.mjs', patched);
   return import(pathToFileURL(DIR + '_worker_test.mjs').href);}
 
@@ -661,12 +661,16 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     // sstp 全局代理（xHTTP 路径）
     connectLog = [];
     const frSS = vlessFrame(wUuid, 'ss-target.org', 443, new Uint8Array([4]));
-    const wres5 = await WK.default.fetch({ url: 'https://w.test/sstp://1.2.3.4:443', method: 'POST', headers: { get: k => ({ 'content-type': 'application/grpc' })[k.toLowerCase()] ?? null }, body: new ReadableStream({ start(c) { c.enqueue(frSS); c.close(); } }), cf: {}, fetcher: wreq.fetcher }, {}, { waitUntil() {} });
-    check('worker xHTTP：sstp:// 全局代理建连', wres5.status === 200 && connectLog.some(s => s.host === '1.2.3.4' && s.port === 443 && s.written.some(w => w[0] === 4)), connectLog.map(s => s.host + ':' + s.port).join(','));
+    const sstpOpts = [];
+    const sstpFetcher = { connect(a, o) { const s = makeTargetSocket(typeof a === 'string' ? a : a.hostname, (a && a.port) || 443); sstpOpts.push(o); connectLog.push(s); setTimeout(() => s.close(), 30); return s; } };
+    const wres5 = await WK.default.fetch({ url: 'https://w.test/sstp://1.2.3.4:443', method: 'POST', headers: { get: k => ({ 'content-type': 'application/grpc' })[k.toLowerCase()] ?? null }, body: new ReadableStream({ start(c) { c.enqueue(frSS); c.close(); } }), cf: {}, fetcher: sstpFetcher }, {}, { waitUntil() {} });
+    const sstpSock = connectLog.find(s => s.host === '1.2.3.4' && s.port === 443);
+    const firstWrite = sstpSock && sstpSock.written[0] ? Buffer.from(sstpSock.written[0]).toString('latin1') : '';
+    check('worker xHTTP：sstp:// 走真实 SSTP 握手（TLS 连 443，首写 SSTP_DUPLEX_POST；桩不应答 → 502 而非把 VLESS 载荷裸写）', wres5.status === 502 && !!sstpSock && sstpOpts[0] && sstpOpts[0].secureTransport === 'on' && firstWrite.startsWith('SSTP_DUPLEX_POST /sra_') && !sstpSock.written.some(w => w.length === 1 && w[0] === 4), `status=${wres5.status} first=${firstWrite.slice(0, 30)} tls=${sstpOpts[0] && sstpOpts[0].secureTransport}`);
     try { wctrl && wctrl.close(); } catch {}
   } catch (e) { console.error('[wxh ERR]', e.stack || e.message); check('worker xHTTP 测试', false, String(e.stack || e.message).split('\n')[0]); }
 
-  // snippets：sstp:// 全局代理透传（TCP 连 443 后回 VLESS 前缀）+ 12s 超时参数存在性
+  // snippets：xHTTP 默认直连透传 + 12s 超时参数存在性
   try {
     const snipUuid5 = extractUuid(readFileSync(DIR + 'snippets.js', 'utf8').split('\n')[0]);
     const SN5 = await import(pathToFileURL(DIR + 'snippets.js').href);
@@ -677,7 +681,7 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     const rS = await SN5.default.fetch({ url: 'https://w.test/xh', method: 'POST', headers: { get: k => ({ 'content-type': 'application/grpc' })[k.toLowerCase()] ?? null }, body: bdS, cf: {}, fetcher: { connect(a) { const sock = makeTargetSocket(typeof a === 'string' ? a : a.hostname, (a && a.port) || 443); connectLog.push(sock); return sock; } } }, undefined, { waitUntil() {} });
     const rdrS = rS.body.getReader();
     const fS = await Promise.race([rdrS.read(), new Promise((_, re) => setTimeout(() => re(new Error('TIMEOUT')), 800))]);
-    check('snippets sstp:// 全局代理透传', fS.value && fS.value[0] === 0 && fS.value[1] === 0 && connectLog.some(s => s.host === 'sstp-target.org' && s.port === 443), connectLog.map(s => s.host + ':' + s.port).join(',') + ' prefix=' + JSON.stringify(fS.value && Array.from(fS.value.slice(0, 2))));
+    check('snippets xHTTP 默认直连透传（原误标 sstp 用例；URL 未含 sstp）', fS.value && fS.value[0] === 0 && fS.value[1] === 0 && connectLog.some(s => s.host === 'sstp-target.org' && s.port === 443), connectLog.map(s => s.host + ':' + s.port).join(',') + ' prefix=' + JSON.stringify(fS.value && Array.from(fS.value.slice(0, 2))));
     rdrS.cancel().catch(() => {}); cS && cS.close();
     check('snippets 12s 建连超时已配置', readFileSync(DIR + 'snippets.js', 'utf8').includes('12e3'), 'yes');
   } catch (e) { check('snippets sstp 测试', false, e.message); }
@@ -716,10 +720,10 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
   try {
     let sq = [];
     const sdb = { prepare(sql) { return { bind() { return this; }, run: async () => { sq.push(sql.trim().split(' ')[0].toUpperCase()); return {}; }, all: async () => ({ results: [] }) }; } };
-    await WK.incrementDailyStats({ DB: sdb });
-    await WK.incrementDailyStats({ DB: sdb });
+    await WK.incrementDailyStats({ DB: sdb }, true);
+    await WK.incrementDailyStats({ DB: sdb }, true);
     const ins = sq.filter(x => x === 'INSERT').length, del = sq.filter(x => x === 'DELETE').length, sel = sq.filter(x => x === 'SELECT').length;
-    check('worker incrementDailyStats：DELETE 降频为每天一次且无 SELECT', ins === 2 && del === 1 && sel === 0, `INSERT=${ins} DELETE=${del} SELECT=${sel}`);
+    check('worker incrementDailyStats：两次强制 flush 各 1 次 UPSERT、DELETE 清理每天一次、无 SELECT', ins === 2 && del === 1 && sel === 0, `INSERT=${ins} DELETE=${del} SELECT=${sel}`);
   } catch (e) { check('worker incrementDailyStats 降频测试', false, e.message); }
 
   // worker：getCustomIPs 远程源并行抓取（顺序保持 / 单源失败不影响 / 不再串行累加）
@@ -1500,6 +1504,35 @@ console.log('\n===== 批次 7 EDT 对齐 =====');
   {
     const d = await subOf({ ...ADD2, RANDOM_HOST: '1', HOSTS: 'evil.com/@x,b.test' });
     check('A-3 HOSTS 白名单：含 / @ 的非法域名被过滤（防节点 URI 注入）', !d.includes('evil.com'), d.slice(0, 120));
+  }
+
+  // ---- NET：订阅默认传输 ws|xhttp（env/D1 → ?net= 覆盖 → 转换器回源恒 ws）----
+  const subOfUrl = async (env, u) => { const r = await call3(mkR3({ url: u, headers: { 'User-Agent': UA3 } }), env); return unb64(await r.text()); };
+  resetCfg3();
+  { const d = await subOf(ADD2); check('NET 未配：节点 type=ws 且无 mode=（默认零影响）', /type=ws&/.test(d) && !d.includes('mode='), d.slice(0, 140)); }
+  resetCfg3();
+  { const d = await subOf({ ...ADD2, NET: 'xhttp' }); check('NET=xhttp：节点 type=xhttp&mode=stream-one（每行）', d.split('\n').filter(Boolean).every(l => l.includes('type=xhttp&host=') && l.includes('&mode=stream-one')), d.slice(0, 160)); }
+  resetCfg3();
+  { const d = await subOfUrl({ ...ADD2, NET: 'xhttp' }, 'https://w.test/sub?uuid=' + UUID0 + '&net=ws'); check('NET=xhttp + ?net=ws → 本次 ws', /type=ws&/.test(d) && !d.includes('xhttp'), d.slice(0, 120)); }
+  resetCfg3();
+  { const d = await subOfUrl(ADD2, 'https://w.test/sub?uuid=' + UUID0 + '&net=xhttp'); check('NET 未配 + ?net=xhttp → 本次 xhttp', /type=xhttp&/.test(d) && d.includes('mode=stream-one'), d.slice(0, 120)); }
+  resetCfg3();
+  { const d = await subOfUrl({ ...ADD2, NET: 'xhttp' }, 'https://w.test/123456?flag=true&net=xhttp'); check('NET=xhttp 但 flag=true（转换器回源）→ 恒 ws', /type=ws&/.test(d) && !d.includes('xhttp'), d.slice(0, 120)); }
+  resetCfg3();
+  { const d = await subOfUrl({ ...ADD2, NET: 'XHTTP ' }, 'https://w.test/sub?uuid=' + UUID0); check('NET 大小写/空白容错："XHTTP " → xhttp', /type=xhttp&/.test(d), d.slice(0, 120)); }
+  resetCfg3();
+  { const d = await subOfUrl({ ...ADD2, NET: 'grpc' }, 'https://w.test/sub?uuid=' + UUID0); check('NET 非法值 → 回退 ws', /type=ws&/.test(d) && !d.includes('mode='), d.slice(0, 120)); }
+  resetCfg3();
+  {
+    // 路径 B：上游生成器返回 ws 模板行（含本端 UUID）+ 外来节点行 → 仅本端行改写
+    const save = globalThis.fetch;
+    const up = 'vless://' + UUID0 + '@1.2.3.4:443?encryption=none&security=tls&type=ws&host=w.test&path=%2F#mine\nvless://11111111-2222-4333-8444-555555555555@5.6.7.8:443?encryption=none&security=tls&type=ws&host=x.test#other';
+    globalThis.fetch = async (u) => { const s = String((u && u.url) || u); if (s.includes('/sub?host=example.com')) return new RealResponse('nope', { status: 500 }); if (s.includes('gen.test/sub?')) return new RealResponse(btoa(up), { status: 200 }); return new RealResponse('nf', { status: 404 }); };
+    try {
+      const d = await subOfUrl({ NET: 'xhttp', SUB_DOMAIN: 'gen.test' }, 'https://w.test/123456');
+      const mine = d.split('\n').find(l => l.includes(UUID0)) || '', other = d.split('\n').find(l => l.includes('11111111-2222')) || '';
+      check('NET=xhttp 路径 B：上游 ws 行（本端 UUID）改写为 xhttp+stream-one，外来行不动', mine.includes('type=xhttp&mode=stream-one') && other.includes('type=ws') && !other.includes('xhttp'), (mine + ' | ' + other).slice(0, 200));
+    } finally { globalThis.fetch = save; }
   }
 
   // ---- A-4 / A-5：转换器回源钉 &target=mixed + 补 udp/xudp/tls13/append_type ----
@@ -2598,8 +2631,12 @@ console.log('\n===== Snippets 平台适配 =====');
   await routeCase('snippets A-6 /gs5= → 全局 socks5（先连代理，不直连目标）', 'https://w.test/gs5=u:p@s5-global.test:1080', 's5-global.test', 1080);
   await routeCase('snippets A-6 /s5=（无 g）→ 仍先直连目标（回落语义不变）', 'https://w.test/s5=u:p@s5-fb.test:1080', 'tgt-a6.org', 443);
   await routeCase('snippets A-6 /ghttp= → 全局 HTTP CONNECT', 'https://w.test/ghttp=u:p@http-global.test:8080', 'http-global.test', 8080);
-  await routeCase('snippets A-6 /sstp= → 提升为全局（连 sstp 主机 443）', 'https://w.test/sstp=sstp-a6.test', 'sstp-a6.test', 443);
-  await routeCase('snippets A-6 /x/gsstp=host:8443 → 路径中段 g 前缀', 'https://w.test/x/gsstp=sstp-mid.test:8443', 'sstp-mid.test', 8443);
+  for (const u of ['https://w.test/sstp=sstp-a6.test', 'https://w.test/x/gsstp=sstp-mid.test:8443', 'https://w.test/sstp://h.test:443', 'https://w.test/?sstp=h.test']) {
+    connectLog = []; __pairs.length = 0;
+    const res = await SN.default.fetch(wsReq(u, vlessFrame(S_UUID, 'tgt-a6.org', 443, new Uint8Array([1]))));
+    await sleep(60);
+    check('snippets sstp 语法（仅 Workers 支持真 SSTP）→ 400 Bad cfg，不再裸 TCP 冒充：' + u.slice(15), res.status === 400 && connectLog.length === 0, 'status=' + res.status + ' conn=' + connectLog.length);
+  }
   await routeCase('snippets A-6 ?socks5=…&global=1 → 全局', 'https://w.test/?socks5=u:p@s5-q.test:1081&global=1', 's5-q.test', 1081);
   await routeCase('snippets A-6 ?https= → 回落（先直连目标）', 'https://w.test/?https=u:p@h-q.test', 'tgt-a6.org', 443);
   await routeCase('snippets A-6 /x/s5= 路径中段（无 g）→ 先直连（反代兜底腿保留）', 'https://w.test/x/s5=u:p@s5-mid.test:1080', 'tgt-a6.org', 443);
@@ -2697,6 +2734,322 @@ console.log('\n===== Snippets 平台适配 =====');
     await res2.text();
     check('snippets 订阅配额 SRQ=2：clash 转换器 1 次 + ECH 1 次，ECH 失败不再打备用 DoH（≤2）', res2.status === 200 && calls.length === 2, `calls=${calls.length} ${calls.map(u => u.slice(0, 40)).join(' | ')}`);
   } catch (e) { check('snippets 订阅配额测试', false, e.message); }
+  globalThis.fetch = realFetch;
+}
+
+// ================= 19. 第十四轮：订阅区域审查修复（S1–S16） =================
+console.log('\n===== 第十四轮：订阅区域审查修复 =====');
+{
+  const UUID0 = '06b65903-406d-4a41-8463-6fd5c0ee7798';
+  const UA_MOZ = 'Mozilla/5.0 (S Test)';
+  const ctxS = { waitUntil(p) { try { Promise.resolve(p).catch(() => { }); } catch { } } };
+  const mkR = ({ url, method = 'GET', headers = {}, body = null }) => {
+    const h = {}; for (const [k2, v2] of Object.entries(headers)) h[k2.toLowerCase()] = v2;
+    return { url, method, headers: { get: k => (k.toLowerCase() in h ? h[k.toLowerCase()] : null) }, cf: { country: 'US', city: 'T' }, body,
+      json: async () => { try { return JSON.parse(body); } catch { return null; } }, text: async () => (typeof body === 'string' ? body : ''),
+      fetcher: { connect() { throw new Error('no-connect'); } } };
+  };
+  const call = (req, env) => WK.default.fetch(req, env || {}, ctxS);
+  const reset = () => { try { WK.cfgCacheReset(); } catch { } };
+  const unb64 = (t) => { try { return decodeURIComponent(atob(t)); } catch (e) { try { return atob(t); } catch (e2) { return ''; } } };
+  const raw64 = (t) => { try { return decodeURIComponent(escape(atob(t))); } catch (e) { try { return atob(t); } catch (e2) { return "''"; } } };
+  const withFetch = async (fn, handler) => { const save = globalThis.fetch; const seen = []; globalThis.fetch = async (u, o) => { const s = String((u && u.url) || u); seen.push({ u: s, o }); return handler(s, o); }; try { return await fn(seen); } finally { globalThis.fetch = save; } };
+  const notFound = () => new RealResponse('nf', { status: 404 });
+  const ADD2 = { ADD: '1.1.1.1:443#n1\n8.8.8.8:443#n2' };
+
+  // S1 ADDSUB 标签：# 不得被百分号编码
+  reset();
+  await withFetch(async () => {
+    const r = await call(mkR({ url: 'https://w.test/sub?uuid=' + UUID0, headers: { 'User-Agent': UA_MOZ } }), { ...ADD2, ADDSUB: 'https://airport.test/sub#A' });
+    const d = raw64(await r.text());
+    check('S1 ADDSUB 标签：无 # 的 vmess 行追加 #%5BA%5D（不再把 # 编成 %23 破坏 base64）', d.includes('vmess://eyJhIjoxfQ==#%5BA%5D') && !d.includes('%23'), d.split('\n').find(l => l.startsWith('vmess')) || d.slice(0, 120));
+    check('S1 ADDSUB 标签：已有 # 的行在备注后追加 [A]', /vless:\/\/u@1\.2\.3\.4:443\?type=ws&path=%2Fabc#n%20%5BA%5D/.test(d), d.split('\n').find(l => l.startsWith('vless://u@')) || '');
+  }, (s) => s.includes('airport.test') ? new RealResponse('vless://u@1.2.3.4:443?type=ws&path=%2Fabc#n\nvmess://eyJhIjoxfQ==', { status: 200 }) : notFound());
+
+  // S2 路径 B：ECH/fp/PS 只改写本端 vless 行，透传 vmess/ss/trojan 原样
+  reset();
+  await withFetch(async () => {
+    const up = ['vless://' + UUID0 + '@1.2.3.4:443?encryption=none&security=tls&type=ws&host=w.test&path=%2F&fp=firefox#mine', 'vmess://eyJ2IjoiMiJ9', 'ss://YWVzLTEyOC1nY206cHc@9.9.9.9:8388#ssnode', 'trojan://pw@real.test:443?security=tls&type=tcp#rt'].join('\n');
+    const r = await call(mkR({ url: 'https://w.test/123456', headers: { 'User-Agent': 'v2rayN/6.23' } }), { SUB_DOMAIN: 'gen.test', PS: 'P' });
+    const d = raw64(await r.text()); const L = d.split('\n');
+    check('S2 路径 B：本端 vless 行注入 ech + fp 修正 + PS 后缀', L.some(l => l.includes(UUID0) && l.includes('&ech=') && l.includes('fp=chrome') && l.endsWith('#mine%20P')), L.find(l => l.includes(UUID0)) || '');
+    check('S2 路径 B：透传 vmess / ss / trojan 行原样（不注入 ech/fp/PS）', L.includes('vmess://eyJ2IjoiMiJ9') && L.includes('ss://YWVzLTEyOC1nY206cHc@9.9.9.9:8388#ssnode') && L.includes('trojan://pw@real.test:443?security=tls&type=tcp#rt'), L.filter(l => !l.includes(UUID0)).join(' | ').slice(0, 200));
+    void up;
+  }, (s) => s.includes('/sub?host=example.com') ? new RealResponse('nope', { status: 500 }) : s.includes('gen.test/sub?') ? new RealResponse(btoa(['vless://' + UUID0 + '@1.2.3.4:443?encryption=none&security=tls&type=ws&host=w.test&path=%2F&fp=firefox#mine', 'vmess://eyJ2IjoiMiJ9', 'ss://YWVzLTEyOC1nY206cHc@9.9.9.9:8388#ssnode', 'trojan://pw@real.test:443?security=tls&type=tcp#rt'].join('\n')), { status: 200 }) : notFound());
+
+  // S3 BEST_SUB 命中：EDT 哨兵契约输出（占位 UUID / example.com），绝不泄露真实凭据
+  reset();
+  {
+    const BST = 'x'.repeat(40);
+    const r = await call(mkR({ url: 'https://w.test/sub?host=example.com&uuid=00000000-0000-4000-8000-000000000000&bst=' + BST, headers: { 'User-Agent': 'v2rayN/edtunnel (https://github.com/x/edgetunnel)' } }), { ...ADD2, BEST_SUB: '1', SUB_DOMAIN: 'gen.test', BEST_SUB_TOKEN: BST, PROXYIP: 'pip.test', PS: 'leak' });
+    const d = raw64(await r.text());
+    check('S3 BEST_SUB：输出哨兵形态 00000000-…@ip:port + host=example.com + sni=example.com + path=%2F', r.status === 200 && d.includes('00000000-0000-4000-8000-000000000000@1.1.1.1:443') && d.includes('host=example.com') && d.includes('sni=example.com') && d.includes('path=%2F'), d.slice(0, 200));
+    check('S3 BEST_SUB：不含真实 UUID / ProxyIP / ECH / PS', !d.includes(UUID0) && !d.includes('pip.test') && !d.includes('ech=') && !d.includes('leak'), d.slice(0, 200));
+  }
+
+  // S4 /sub?base= 裂变：未配 SUB_TOKEN → 端点关闭（不抓 ADDAPI、不返回优选列表）
+  reset();
+  await withFetch(async (seen) => {
+    const r = await call(mkR({ url: 'https://w.test/sub?base=' + encodeURIComponent('vless://attacker@w.test:443?type=ws'), headers: { 'User-Agent': UA_MOZ } }), { ADDAPI: 'https://admin-src.test/ips.txt' });
+    const d = unb64(await r.text());
+    check('S4 /sub?base= 未配 SUB_TOKEN → 返回错误占位节点，且未抓取 ADDAPI', d.includes('Token') && !d.includes('2.2.2.2') && !seen.some(x => x.u.includes('admin-src.test')), 'seen=' + seen.map(x => x.u).join(',') + ' body=' + d.slice(0, 60));
+  }, (s) => s.includes('admin-src.test') ? new RealResponse('2.2.2.2:443#leak', { status: 200 }) : notFound());
+  reset();
+  await withFetch(async () => {
+    const r = await call(mkR({ url: 'https://w.test/sub?base=' + encodeURIComponent('vless://' + UUID0 + '@w.test:443?type=ws') + '&token=tok-ok', headers: { 'User-Agent': UA_MOZ } }), { SUB_TOKEN: 'tok-ok', ADD: '[2606:4700::6810:84e5]:443#v6node' });
+    const d = unb64(await r.text());
+    check('S7 /sub?base= IPv6 优选：hostname 带方括号写入（不再回落到本端域名）', d.includes('@[2606:4700::6810:84e5]:443'), d.slice(0, 160));
+  }, () => notFound());
+
+  // S5 pSB：只给本端节点注入 utls/ech；trojan/hysteria2 透传节点不动
+  reset();
+  await withFetch(async () => {
+    const cfg = { outbounds: [{ type: 'vless', tag: 'mine', uuid: UUID0, tls: { enabled: true } }, { type: 'trojan', tag: 't', password: 'pw', tls: { enabled: true } }, { type: 'hysteria2', tag: 'h', password: 'pw', tls: { enabled: true } }] };
+    const r = await call(mkR({ url: 'https://w.test/123456', headers: { 'User-Agent': 'sing-box 1.12' } }), { SUBAPI: 'https://conv.test' });
+    const j = JSON.parse(await r.text());
+    const mine = j.outbounds.find(o => o.tag === 'mine'), t = j.outbounds.find(o => o.tag === 't'), h = j.outbounds.find(o => o.tag === 'h');
+    check('S5 pSB：本端 vless 注入 utls；trojan / hysteria2 透传节点不注入', !!mine.tls.utls && !t.tls.utls && !h.tls.utls && !t.tls.ech && !h.tls.ech, JSON.stringify([t.tls, h.tls]));
+    void cfg;
+  }, (s) => s.includes('conv.test') ? new RealResponse(JSON.stringify({ outbounds: [{ type: 'vless', tag: 'mine', uuid: UUID0, tls: { enabled: true } }, { type: 'trojan', tag: 't', password: 'pw', tls: { enabled: true } }, { type: 'hysteria2', tag: 'h', password: 'pw', tls: { enabled: true } }] }), { status: 200 }) : s.includes('/sub?host=example.com') ? new RealResponse('nope', { status: 500 }) : new RealResponse('x', { status: 500 }));
+
+  // S6 _aggUnb64：无 padding 的 base64 订阅体也能解出
+  reset();
+  await withFetch(async () => {
+    const two = 'vless://aa@3.3.3.3:443?type=ws#a\nvless://bb@4.4.4.4:443?type=ws#b';
+    const r = await call(mkR({ url: 'https://w.test/sub?uuid=' + UUID0, headers: { 'User-Agent': UA_MOZ } }), { ...ADD2, ADDSUB: 'https://airport2.test/sub' });
+    const d = unb64(await r.text());
+    check('S6 ADDSUB：无 padding 的 base64 体解出两条节点（不再变成一条垃圾 IP）', d.includes('vless://aa@3.3.3.3:443') && d.includes('vless://bb@4.4.4.4:443') && !d.includes('@dmxl'), d.slice(0, 160));
+    void two;
+  }, (s) => s.includes('airport2.test') ? new RealResponse(btoa('vless://aa@3.3.3.3:443?type=ws#a\nvless://bb@4.4.4.4:443?type=ws#b').replace(/=+$/, ''), { status: 200 }) : notFound());
+
+  // S8 转换器 / 上游订阅 fetch 携带超时信号
+  reset();
+  await withFetch(async (seen) => {
+    await call(mkR({ url: 'https://w.test/123456', headers: { 'User-Agent': 'clash-verge' } }), { SUBAPI: 'https://conv.test' });
+    const c = seen.find(x => x.u.includes('conv.test'));
+    check('S8 转换器 fetch 携带 AbortSignal 超时', !!c && c.o && c.o.signal instanceof AbortSignal, c ? String(!!c.o?.signal) : 'no conv call');
+  }, (s) => s.includes('conv.test') ? new RealResponse('proxies: []\n', { status: 200 }) : new RealResponse('x', { status: 500 }));
+
+  // S9 / S10 pCL：行内 dns: 不重复前置；带引号 uuid 也注入 ech-opts
+  reset();
+  await withFetch(async () => {
+    const r = await call(mkR({ url: 'https://w.test/123456', headers: { 'User-Agent': 'clash-verge' } }), { SUBAPI: 'https://conv.test' });
+    const y = await r.text();
+    check('S9 pCL：已有行内 dns: 时不再前置第二个 dns:（yaml 重复键）', (y.match(/^dns:/mg) || []).length === 1, 'dns count=' + (y.match(/^dns:/mg) || []).length);
+    check('S10 pCL：uuid 带引号的本端节点也注入 ech-opts + client-fingerprint', y.includes('ech-opts') && y.includes('client-fingerprint: chrome'), y.slice(0, 200));
+  }, (s) => s.includes('conv.test') ? new RealResponse('dns: {enable: true}\nproxies:\n  - {name: a, type: vless, server: 1.1.1.1, port: 443, uuid: "' + UUID0 + '", tls: true, network: ws, client-fingerprint: firefox}\n', { status: 200 }) : new RealResponse('x', { status: 500 }));
+
+  // S13 target 白名单：非法 target 视为未指定（按 UA 判定），不拼进转换器 URL
+  reset();
+  await withFetch(async (seen) => {
+    const r = await call(mkR({ url: 'https://w.test/123456?target=clash%26list%3Dtrue', headers: { 'User-Agent': UA_MOZ } }), { ...ADD2, SUBAPI: 'https://conv.test' });
+    check('S13 非法 target → 忽略（Mozilla UA 走原生 base64，不调转换器）', r.status === 200 && !seen.some(x => x.u.includes('conv.test')), 'seen=' + seen.map(x => x.u.slice(0, 40)).join(','));
+  }, () => notFound());
+
+  // S14 转换器全部失败 → 502（不再把 base64 喂给 clash 客户端）
+  reset();
+  await withFetch(async () => {
+    const r = await call(mkR({ url: 'https://w.test/123456', headers: { 'User-Agent': 'clash-verge' } }), { ...ADD2, SUBAPI: 'https://conv.test' });
+    check('S14 转换器 500 → 本端返回 502（clash 客户端不会收到 base64）', r.status === 502, String(r.status));
+  }, () => new RealResponse('x', { status: 500 }));
+
+  // S16 host === SUB_DOMAIN：转换器回源仍走 flag=true&target=mixed 形态
+  reset();
+  await withFetch(async (seen) => {
+    await call(mkR({ url: 'https://w.test/123456', headers: { 'User-Agent': 'clash-verge' } }), { ...ADD2, SUBAPI: 'https://conv.test', SUB_DOMAIN: 'w.test' });
+    const conv = seen.find(x => x.u.includes('conv.test'));
+    const inner = conv ? decodeURIComponent((conv.u.match(/[?&]url=([^&]*)/) || [0, ''])[1]) : '';
+    check('S16 host==SUB_DOMAIN：回源 URL 为 /SUB_PW?flag=true&target=mixed（不再用 /sub?uuid= 形态）', inner.includes('/123456?flag=true&target=mixed'), 'inner=' + inner.slice(0, 120));
+  }, (s) => s.includes('conv.test') ? new RealResponse('proxies: []\n', { status: 200 }) : notFound());
+  reset();
+}
+
+// ================= 20. 第十五轮：全面审查修复（数据路径 D1–D6 / 面板 P0–P3 / TURN·SSTP F1–F8） =================
+console.log('\n===== 第十五轮：全面审查修复 =====');
+{
+  const UUID0 = '06b65903-406d-4a41-8463-6fd5c0ee7798';
+  try { WK.setUUID(UUID0); } catch { }
+  const ctxR = { waitUntil(p) { try { Promise.resolve(p).catch(() => { }); } catch { } } };
+  const mkR = ({ url, method = 'GET', headers = {}, body = null, fetcher = null }) => {
+    const h = {}; for (const [k2, v2] of Object.entries(headers)) h[k2.toLowerCase()] = v2;
+    return { url, method, headers: { get: k => (k.toLowerCase() in h ? h[k.toLowerCase()] : null) }, cf: { country: 'US', city: 'T' }, body,
+      json: async () => { try { return JSON.parse(body); } catch { return null; } }, text: async () => (typeof body === 'string' ? body : ''),
+      fetcher: fetcher || { connect() { throw new Error('no-connect'); } } };
+  };
+  const call = (req, env) => WK.default.fetch(req, env || {}, ctxR);
+  const reset = () => { try { WK.cfgCacheReset(); } catch { } };
+  const B7 = WK.__b7 || {}, B9 = WK.__b9 || {};
+  globalThis.fetch = async (url, opts) => { const u = String(url instanceof URL ? url : url?.url || url); if (/dns-query|\/resolve/.test(u) && /[?&]name=/.test(u)) return new RealResponse(JSON.stringify({ Answer: [] }), { status: 200 }); return new RealResponse('nf', { status: 404 }); };
+
+  // D1 WS 文本帧：不得按数字分配（"100000000" → 1e8 字节），忽略后二进制帧照常工作
+  try {
+    connectLog = []; __pairs.length = 0;
+    const req = stubRequest('https://w.test/', { 'Upgrade': 'websocket' });
+    const res = await WK._ws(req, {});
+    const pair = __pairs[__pairs.length - 1];
+    const m0 = process.memoryUsage().heapUsed;
+    pair.server._onmessage('300000000');
+    const grew = process.memoryUsage().heapUsed - m0;
+    pair.server._onmessage(vlessFrame(UUID0, 'after-text.org', 443, new Uint8Array([1])));
+    await sleep(120);
+    check('D1 WS 文本帧被忽略：无 3e8 字节分配、连接未断、后续二进制帧正常建连', res.status === 101 && grew < 50 * 1024 * 1024 && !pair.server._closed && connectLog.some(s => s.host === 'after-text.org'), `grew=${(grew / 1048576).toFixed(1)}MB closed=${pair.server._closed} conn=${connectLog.map(s => s.host).join(',')}`);
+    pair.client.close();
+  } catch (e) { check('D1 文本帧测试', false, e.message); }
+
+  // D2 上行队列高水位：条目 / 字节上限，溢出 sow 返回 0
+  try {
+    const k = WK.mkK(20480);
+    let ok = 1; for (let i = 0; i < 4096; i++) ok &= k.sow(new Uint8Array(1));
+    const over = k.sow(new Uint8Array(1));
+    const k2 = WK.mkK(20480);
+    const big = k2.sow(new Uint8Array(16 * 1024 * 1024 + 1));
+    check('D2 mkK：4096 条内接受，第 4097 条拒绝；单块 >16MiB 拒绝', ok === 1 && over === 0 && big === 0, `ok=${ok} over=${over} big=${big}`);
+  } catch (e) { check('D2 队列上限测试', false, e.message); }
+
+  // D3 建连期间客户端关闭 → 迟到的 socket 必须被关闭
+  try {
+    connectLog = []; __pairs.length = 0;
+    const req = stubRequest('https://w.test/', { 'Upgrade': 'websocket' });
+    req.fetcher = { connect(a) { const s = makeTargetSocket(typeof a === 'string' ? a : a.hostname, (a && a.port) || 443); s.opened = new Promise(r => setTimeout(r, 120)); connectLog.push(s); return s; } };
+    await WK._ws(req, {});
+    const pair = __pairs[__pairs.length - 1];
+    pair.server._onmessage(vlessFrame(UUID0, 'late-sock.org', 443, new Uint8Array([1])));
+    await sleep(30); pair.server.close();   // 服务端视角的连接关闭事件
+    await sleep(250);
+    check('D3 建连中客户端关闭 → 迟到 socket 已关闭（不泄漏）', connectLog.length === 1 && connectLog[0]._isClosed(), `n=${connectLog.length} closed=${connectLog[0] && connectLog[0]._isClosed()}`);
+  } catch (e) { check('D3 迟到 socket 测试', false, e.message); }
+
+  // D4 s5Conn 握手失败 → socket 关闭
+  try {
+    connectLog = []; __pairs.length = 0;
+    const req = stubRequest('https://w.test/?socks5=1.2.3.4:1080&global=1', { 'Upgrade': 'websocket' });
+    req.fetcher = { connect(a) { const s = makeTargetSocket(typeof a === 'string' ? a : a.hostname, (a && a.port) || 443); connectLog.push(s); setTimeout(() => s._push(new Uint8Array([5, 255])), 10); return s; } };
+    await WK._ws(req, {});
+    const pair = __pairs[__pairs.length - 1];
+    pair.server._onmessage(vlessFrame(UUID0, 'via-s5.org', 443, new Uint8Array([1])));
+    await sleep(200);
+    check('D4 SOCKS5 方法被拒（05 ff）→ 抛错且代理 socket 已关闭、WS 已关', connectLog.length === 1 && connectLog[0]._isClosed() && pair.server._closed, `closed=${connectLog[0] && connectLog[0]._isClosed()} ws=${pair.server._closed}`);
+  } catch (e) { check('D4 s5Conn 泄漏测试', false, e.message); }
+
+  // D5 _extHostSafe：inet_aton 2/3 段十六进制简写
+  if (B7.extHostSafe) {
+    const bad = ['0x7f.1', '0xa.1', '0x7f.0.1', '0xc0.0xa8.1', '127.1', '2130706433'];
+    check('D5 _extHostSafe 拒绝 2/3 段 hex 简写（0x7f.1 / 0xa.1 / 0x7f.0.1 / 0xc0.0xa8.1）', bad.every(h => !B7.extHostSafe(h).ok), bad.map(h => h + '=' + B7.extHostSafe(h).ok).join(' '));
+    check('D5 _extHostSafe 公网仍放行', B7.extHostSafe('93.184.216.34').ok && B7.extHostSafe('example.com').ok, 'ok');
+  }
+
+  // P0 Fetch Metadata：跨站 POST 到 flag= 端点 → 403（IP 白名单管理员 CSRF）
+  reset();
+  {
+    const env = { WL_IP: '9.9.9.9' };
+    const base = { url: 'https://w.test/?flag=save_config', method: 'POST', body: JSON.stringify({ PS: 'x' }) };
+    const r1 = await call(mkR({ ...base, headers: { 'User-Agent': 'Mozilla/5.0', 'cf-connecting-ip': '9.9.9.9', 'Sec-Fetch-Site': 'cross-site', 'Content-Type': 'text/plain' } }), env);
+    const r2 = await call(mkR({ ...base, headers: { 'User-Agent': 'Mozilla/5.0', 'cf-connecting-ip': '9.9.9.9', 'Origin': 'https://evil.test', 'Content-Type': 'application/json' } }), env);
+    const r3 = await call(mkR({ ...base, headers: { 'User-Agent': 'Mozilla/5.0', 'cf-connecting-ip': '9.9.9.9', 'Sec-Fetch-Site': 'same-origin', 'Origin': 'https://w.test', 'Content-Type': 'application/json' } }), env);
+    const t1 = await r1.text(), t2 = await r2.text(), t3 = await r3.text();
+    check('P0 CSRF：Sec-Fetch-Site=cross-site → 403 cross-site（即便 IP 在白名单）', r1.status === 403 && t1.includes('cross-site'), r1.status + ' ' + t1.slice(0, 40));
+    check('P0 CSRF：Origin 不同源 → 403 cross-site', r2.status === 403 && t2.includes('cross-site'), r2.status + ' ' + t2.slice(0, 40));
+    check('P0 CSRF：同源请求放行到业务逻辑（白名单管理员 → 200 ok）', r3.status === 200 && t3.includes('ok'), r3.status + ' ' + t3.slice(0, 40));
+  }
+  // P0-b 面板输入框转义
+  reset();
+  {
+    const env = { PROXYIP: 'x" autofocus onfocus="alert(1)', WEB_PASSWORD: 'abc', AUTH_SECRET: 's'.repeat(32) };
+    const lr = await call(mkR({ url: 'https://w.test/?flag=login', method: 'POST', headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json', 'cf-connecting-ip': '8.8.8.8' }, body: JSON.stringify({ pwd: 'abc' }) }), env);
+    const ck = (lr.headers.get('set-cookie') || '').split(';')[0];
+    const r = await call(mkR({ url: 'https://w.test/', headers: { 'User-Agent': 'Mozilla/5.0', 'cf-connecting-ip': '8.8.8.8', 'Cookie': ck } }), env);   // 面板在 /（带 cookie）
+    const t = await r.text();
+    check('P0-b 面板 pIp 输入框值经转义（不出现裸 onfocus= 属性）', r.status === 200 && !t.includes('x" autofocus onfocus="alert(1)') && t.includes('x&quot; autofocus onfocus=&quot;alert(1)'), String(r.status));
+  }
+
+  // P1-a A-9 链式代理：走真实 ws() 调用路径（path 无前导斜杠）
+  if (B9.chainProxyCfg && B9.b64uEncode) {
+    try {
+      const saveF = globalThis.fetch; globalThis.fetch = wrapDoh(async () => new RealResponse('', { status: 200 }));
+      const enc = new TextEncoder();
+      const base = await crypto.subtle.importKey('raw', enc.encode(UUID0), 'HKDF', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode('chain'), info: enc.encode('chain') }, base, 256);
+      const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt']);
+      const iv = new Uint8Array(12).fill(7);
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify({ v: 1, t: Math.floor(Date.now() / 1000), type: 'socks5', hostname: 'chain-proxy.example.com', port: 1080, username: 'u', password: 'p' }))));
+      const secret = B9.b64uEncode(new Uint8Array([...iv, ...ct]));
+      connectLog = []; __pairs.length = 0;
+      const req = stubRequest('https://w.test/video/' + secret, { 'Upgrade': 'websocket' });
+      const res = await WK._ws(req, { CHAIN_PROXY: '1' });
+      const pair = __pairs[__pairs.length - 1];
+      pair.server._onmessage(vlessFrame(UUID0, 'chain-target.org', 443, new Uint8Array([1])));
+      await sleep(150);
+      check('P1-a A-9 端到端：GET /video/<密文> 经 ws() → 首连为链式 socks5 代理（不再静默回落 ProxyIP）', res.status === 101 && connectLog.length > 0 && connectLog[0].host === 'chain-proxy.example.com' && connectLog[0].port === 1080, connectLog.map(s => s.host + ':' + s.port).join(','));
+      pair.client.close();
+      globalThis.fetch = saveF;
+    } catch (e) { check('P1-a A-9 端到端测试', false, e.message); }
+  }
+
+  // P1-b A-8 反代：入站 Cookie / cf-connecting-ip 不转发
+  reset();
+  {
+    let seenH = null; const saveF = globalThis.fetch;
+    globalThis.fetch = wrapDoh(async (u, o) => { seenH = o && o.headers; return new RealResponse('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } }); });
+    try {
+      const r = await call(mkR({ url: 'https://w.test/page', headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'auth=1.abc', 'cf-connecting-ip': '5.5.5.5', 'Authorization': 'Bearer x' } }), { URL: 'https://example.com' });
+      check('P1-b A-8 反代请求不携带 Cookie / Authorization / cf-connecting-ip', r.status === 200 && seenH && !seenH.get('cookie') && !seenH.get('authorization') && !seenH.get('cf-connecting-ip') && seenH.get('host') === 'example.com', seenH ? JSON.stringify([...seenH.keys()]) : 'no fetch');
+    } finally { globalThis.fetch = saveF; }
+  }
+
+  // P2-a getSafeEnv：数字型 vars 不崩溃；D1 读失败不缓存空表
+  reset();
+  check('P2-a getSafeEnv：数字型 env（DLS: 7）→ "7"，不抛 trim 错误', (await WK.getSafeEnv({ DLS: 7 }, 'DLS', '9')) === '7');
+  reset();
+  {
+    let calls = 0;
+    const db = { prepare() { return { bind() { return this; }, all: async () => { calls++; throw new Error('D1 down'); }, run: async () => ({}) }; } };
+    const a = await WK.getSafeEnv({ DB: db }, 'PS', 'fb');
+    const b = await WK.getSafeEnv({ DB: db }, 'PS', 'fb');
+    check('P2-a D1 读失败 → 返回默认值且不缓存空表（第二次仍重试 SELECT）', a === 'fb' && b === 'fb' && calls === 2, `calls=${calls}`);
+  }
+  // P2-b _AUTH_SECRET_AUTO：已存在时不被覆盖（DO NOTHING + 直读）
+  reset();
+  {
+    const store = new Map([['_AUTH_SECRET_AUTO', 'a'.repeat(48)]]);
+    const db = { prepare(sql) { const S = String(sql); return { _a: [], bind(...a) { this._a = a; return this; }, all: async function () { if (/WHERE key = \?/.test(S)) { const v = store.get(String(this._a[0])); return { results: v ? [{ value: v }] : [] }; } return { results: [...store].map(([k, v]) => ({ key: k, value: v })) }; }, run: async function () { if (/INSERT/.test(S)) { if (/DO NOTHING/.test(S)) { if (!store.has(String(this._a[0]))) store.set(String(this._a[0]), String(this._a[1])); } else store.set(String(this._a[0]), String(this._a[1])); } return {}; } }; }, batch: async (st) => { for (const x of st) await x.run(); return []; } };
+    const r = await call(mkR({ url: 'https://w.test/?flag=login', method: 'POST', headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json', 'cf-connecting-ip': '8.8.4.4' }, body: JSON.stringify({ pwd: 'abc' }) }), { DB: db });
+    check('P2-b 登录不覆盖既有 _AUTH_SECRET_AUTO（DO NOTHING 语义）', r.status === 200 && store.get('_AUTH_SECRET_AUTO') === 'a'.repeat(48), r.status + ' ' + String(store.get('_AUTH_SECRET_AUTO')).slice(0, 8));
+  }
+  // P2-c validate_cf：请求体不当 env 用；{DB:1} 不污染缓存、不 500
+  reset();
+  {
+    const store = new Map([['PS', 'keep']]);
+    const db = { prepare(sql) { return { bind() { return this; }, all: async () => ({ results: [...store].map(([k, v]) => ({ key: k, value: v })) }), run: async () => ({}) }; }, batch: async () => [] };
+    const env = { DB: db, WL_IP: '9.9.9.9' };
+    const r = await call(mkR({ url: 'https://w.test/?flag=validate_cf', method: 'POST', headers: { 'User-Agent': 'Mozilla/5.0', 'cf-connecting-ip': '9.9.9.9', 'Content-Type': 'application/json' }, body: JSON.stringify({ DB: 1, CF_EMAIL: 123 }) }), env);
+    const j = await r.json().catch(() => null);
+    const ps = await WK.getSafeEnv(env, 'PS', '');
+    check('P2-c validate_cf 传 {DB:1,CF_EMAIL:123} → 200 JSON（不 500），且全局配置缓存未被污染', r.status === 200 && j && j.success === false && ps === 'keep', `status=${r.status} ps=${ps}`);
+    const r2 = await call(mkR({ url: 'https://w.test/?flag=validate_cf', method: 'POST', headers: { 'User-Agent': 'Mozilla/5.0', 'cf-connecting-ip': '9.9.9.9' }, body: '{bad' }), env);
+    check('P2-c validate_cf 非法 JSON → 400（不 500）', r2.status === 400, String(r2.status));
+  }
+  // P2-d stats 聚合：两次普通调用之间不落库，强制 flush 时把累计数一次写入
+  {
+    const seen = [];
+    const db = { prepare(sql) { return { _a: [], bind(...a) { this._a = a; return this; }, run: async function () { seen.push({ sql: String(sql).trim().split(' ')[0].toUpperCase(), a: this._a }); return {}; }, all: async () => ({ results: [] }) }; } };
+    await WK.incrementDailyStats({ DB: db }, true);
+    const n0 = seen.filter(x => x.sql === 'INSERT').length;
+    await WK.incrementDailyStats({ DB: db });
+    await WK.incrementDailyStats({ DB: db });
+    const n1 = seen.filter(x => x.sql === 'INSERT').length;
+    await WK.incrementDailyStats({ DB: db }, true);
+    const last = seen.filter(x => x.sql === 'INSERT').pop();
+    check('P2-d stats 聚合：强制 flush 后两次普通调用不写库，再次 flush 一次写入累计 3', n0 === 1 && n1 === 1 && last && last.a[1] === 3, `n0=${n0} n1=${n1} last=${last && JSON.stringify(last.a)}`);
+  }
+
+  // F5 pCfg：?turn= / ?sstp= 的 cfg 形状与连接器一致
+  {
+    const mk = (u) => new URL(u);
+    const t1 = WK.pCfg(mk('https://w.test/?turn=1.2.3.4:3478'), '', null);
+    const s1 = WK.pCfg(mk('https://w.test/?sstp=1.2.3.4'), '', null);
+    check('F5 ?turn= → gP.cfg.{hostname,port,username:null,password:null,tls:false}', t1.gP && t1.gP.type === 'turn' && t1.gP.cfg.hostname === '1.2.3.4' && t1.gP.cfg.port === 3478 && t1.gP.cfg.username === null && t1.gP.cfg.tls === false, JSON.stringify(t1.gP));
+    check('F5 ?sstp= → gP.cfg.{host,port:443,user:vpn,password:vpn}', s1.gP && s1.gP.type === 'sstp' && s1.gP.cfg.host === '1.2.3.4' && s1.gP.cfg.port === 443 && s1.gP.cfg.user === 'vpn', JSON.stringify(s1.gP));
+  }
   globalThis.fetch = realFetch;
 }
 

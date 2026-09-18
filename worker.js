@@ -31,6 +31,8 @@ const TG_BOT_TOKEN = ""; //在此telegram bot的token令牌
 const TG_CHAT_ID = ""; //在此修改添加你的telegram 用户id
 const ADMIN_IP = ""; //在此修改添加你的白名单IP
 const DLS = "7"; // ADDCSV 专用：速度下限筛选阈值 (单位 MB/s)
+const SUB_FETCH_TIMEOUT = 10000, SUB_BODY_MAX = 1048576, SUB_SRC_MAX = 20; // 订阅侧外部抓取：超时 / 单响应体上限 / 单类来源条数上限
+const NET = "ws"; // 订阅默认传输：ws | xhttp（env/D1 的 NET 覆盖；?net= 单次覆盖；xhttp 固定 mode=stream-one——本端无 GET 下行）
 
 // =============================================================================
 // 🟢 超神奇
@@ -46,9 +48,17 @@ let ECH_SNI = 'cloudflare-ech.com';
 let FP = 'chrome';
 
 // ECH Config 动态获取 (二进制 DoH wire format)
+let _echMemo = { k: '', pem: null, t: 0 };
 async function _getECH(doh = ECH_DNS, allowBackup = true) {
   if (!ECH) return null;
-  const fallback = () => allowBackup && doh !== ECH_DNS_BACKUP ? _getECH(ECH_DNS_BACKUP, false) : null;
+  const _mk = ECH_SNI + '|' + ECH_DNS;
+  if (allowBackup && _echMemo.pem && _echMemo.k === _mk && Date.now() - _echMemo.t < 600000) return _echMemo.pem;
+  const _r = await _getECHRaw(doh, allowBackup);
+  if (allowBackup && _r) _echMemo = { k: _mk, pem: _r, t: Date.now() };
+  return _r;
+}
+async function _getECHRaw(doh = ECH_DNS, allowBackup = true) {
+  const fallback = () => allowBackup && doh !== ECH_DNS_BACKUP ? _getECHRaw(ECH_DNS_BACKUP, false) : null;
   try {
     const parts = ECH_SNI.split('.');
     const qname = [];
@@ -109,7 +119,7 @@ async function pSB(text, uuid) {
       for (const node of cfg[OB]) {
         if (!node.tls) continue;
         // UUID 过滤：只处理本项目生成的节点
-        if (uuid && node.uuid && node.uuid !== uuid && !(node['pass'+'word'] && node['pass'+'word'] === uuid)) continue;
+        if (uuid && !(node.uuid === uuid || node['pass'+'word'] === uuid)) continue;
         if (ECH && echPem) node.tls.ech = { enabled: true, config: echPem };
         const UT = 'ut'+'ls';
         if (!node.tls[UT]) node.tls[UT] = {};
@@ -140,7 +150,9 @@ async function pCL(text, uuid, h) {
     if (ECH) {
       // Worker 预取 ECHConfig，Clash/Mihomo 动态查询作为兜底
       const baseDnsBlock = 'dns:\n  enable: true\n  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n    - 114.114.114.114\n  use-hosts: true\n  nameserver:\n    - https://sm2.doh.pub/dns-query\n    - https://dns.alidns.com/dns-query\n  fallback:\n    - 8.8.4.4\n    - 208.67.220.220\n  fallback-filter:\n    geoip: true\n    geoip-code: CN\n    ipcidr:\n      - 240.0.0.0/4\n      - 127.0.0.1/32\n      - 0.0.0.0/32\n    domain:\n      - \'+.google.com\'\n      - \'+.facebook.com\'\n      - \'+.youtube.com\'\n';
-      if (!/^dns:\s*(?:\n|$)/m.test(y)) y = baseDnsBlock + y;
+      const _hasAnyDns = /^dns:/m.test(y), _hasBlockDns = /^dns:\s*(?:#[^\n]*)?(?:\n|$)/m.test(y);
+      if (!_hasAnyDns) y = baseDnsBlock + y;
+      if (!_hasAnyDns || _hasBlockDns) {
 
       const _bkDoH='https://do'+'h.cm.edu.kg/'+'C'+'ML'+'iu'+'ssss';
       const ne='    "'+h+'":\n      - '+ECH_DNS+'\n      - '+ECH_DNS_BACKUP+'\n      - '+_bkDoH+'\n    "'+ECH_SNI+'":\n      - '+ECH_DNS+'\n      - '+ECH_DNS_BACKUP+'\n      - '+_bkDoH;
@@ -151,12 +163,13 @@ async function pCL(text, uuid, h) {
         const ls = y.split('\n');
         let di = -1, iD = false;
         for (let i = 0; i < ls.length; i++) {
-          if (/^dns:\s*$/.test(ls[i])) { iD = true; continue; }
+          if (/^dns:\s*(?:#[^\n]*)?$/.test(ls[i])) { iD = true; continue; }
           if (iD && /^[a-zA-Z]/.test(ls[i])) { di = i; break; }
         }
         const nspBlock = '  ' + _nsp + ':\n' + ne;
         if (di > 0) { ls.splice(di, 0, nspBlock); y = ls.join('\n'); }
         else { y += '\n' + nspBlock + '\n'; }
+      }
       }
     }
 
@@ -166,7 +179,7 @@ async function pCL(text, uuid, h) {
         let fn=l,bc=(l.match(/\{/g)||[]).length-(l.match(/\}/g)||[]).length;
         while(bc>0&&i+1<L.length){i++;fn+='\n'+L[i];bc+=(L[i].match(/\{/g)||[]).length-(L[i].match(/\}/g)||[]).length;}
         const um=fn.match(/uuid:\s*([^,}\n]+)/);
-        if(um&&um[1].trim()===uuid.trim()){
+        if(um&&um[1].trim().replace(/^["']|["']$/g,'')===uuid.trim()){
           fn=fn.replace(/client-fingerprint:\s*[^,}\s]+/i,'client-fingerprint: '+FP);
           if(ECH) fn=fn.replace(/\}(\s*)$/, ', '+_eo+': {enable: true, '+_qsn+': '+ECH_SNI+(_echB64 ? ', config: '+_echB64 : '')+'}}$1');
         }
@@ -179,7 +192,7 @@ async function pCL(text, uuid, h) {
           if(nx.search(/\S/)<bi&&nt)break;
           nl.push(nx);i++;}
         const um=nl.join('\n').match(/uuid:\s*([^\n]+)/);
-        if(um&&um[1].trim()===uuid.trim()){
+        if(um&&um[1].trim().replace(/^["']|["']$/g,'')===uuid.trim()){
           for(let j=0;j<nl.length;j++){if(/client-fingerprint:/i.test(nl[j])){nl[j]=nl[j].replace(/client-fingerprint:\s*\S+/i,'client-fingerprint: '+FP);break;}}
           let ii=-1;for(let j=nl.length-1;j>=0;j--)if(nl[j].trim()){ii=j;break;}
           if(ECH&&ii>=0){const ind=' '.repeat(bi+2);const echLines=[ind+_eo+':',ind+'  enable: true',ind+'  '+_qsn+': '+ECH_SNI];if(_echB64)echLines.push(ind+'  config: '+_echB64);nl.splice(ii+1,0,...echLines);}}
@@ -312,6 +325,14 @@ const _normalizeV4Literal = (h) => {
     if (vals.length === 1 && Number.isInteger(vals[0]) && vals[0] >= 0 && vals[0] <= 0xFFFFFFFF)
         return [(vals[0]>>>24)&255,(vals[0]>>>16)&255,(vals[0]>>>8)&255,vals[0]&255].join('.');
     if (vals.length === 4 && vals.every(v => Number.isInteger(v) && v>=0 && v<=255)) return vals.join('.');
+    // D5：inet_aton 2/3 段简写（a.b → a.0.0.b / a.b.c → a.b.0.c），末段承载低位字节
+    if ((vals.length === 2 || vals.length === 3) && vals.every(v => Number.isInteger(v) && v >= 0)) {
+        const lead = vals.slice(0, -1), last = vals[vals.length - 1], lastMax = vals.length === 2 ? 0xFFFFFF : 0xFFFF;
+        if (lead.every(v => v <= 255) && last <= lastMax) {
+            const tail = vals.length === 2 ? [(last>>>16)&255,(last>>>8)&255,last&255] : [(last>>>8)&255,last&255];
+            return lead.concat(tail).join('.');
+        }
+    }
     return null;
 };
 // 展开 IPv6 为 8 个 16-bit 组：兼容 :: 压缩、尾部内嵌点分 v4、大小写、前导零
@@ -435,18 +456,22 @@ const addrParser = (raw, defPort = 1080) => {
 async function s5Conn(fetcher, addressType, addressRemote, portRemote, cfg) {
   const { username, password, hostname, port } = cfg;
   const socket = fetcher.connect({ hostname, port });
+  let writer = null, reader = null;
+  try {
   if (socket.opened) await socket.opened;
-  const writer = socket.writable.getWriter();
+  writer = socket.writable.getWriter();
   await writer.write(new Uint8Array([5, username ? 2 : 1, 0, username ? 2 : 0]));
-  const reader = socket.readable.getReader();
+  reader = socket.readable.getReader();
   const enc = new TextEncoder();
-  let resp = (await reader.read()).value;
+  const rd = async () => { const { value, done } = await reader.read(); if (done || !value || value.length < 2) throw new Error('S5 closed'); return value; };
+  let resp = await rd();
   if (resp[1] === 2) {
-    const auth = new Uint8Array([1, username.length, ...enc.encode(username), password.length, ...enc.encode(password)]);
-    await writer.write(auth);
-    resp = (await reader.read()).value;
+    const ub = enc.encode(username || ''), pb = enc.encode(password || '');
+    if (ub.length > 255 || pb.length > 255) throw new Error('S5 cred too long');
+    await writer.write(new Uint8Array([1, ub.length, ...ub, pb.length, ...pb]));
+    resp = await rd();
     if (resp[1] !== 0) throw new Error('S5 auth failed');
-  }
+  } else if (resp[1] !== 0) throw new Error('S5 method rejected');
   let DST;
   // addrType 为内核内部语义：1=IPv4，3=domain，4=IPv6
   if (addressType === 1) DST = new Uint8Array([1, ...addressRemote.split('.').map(Number)]);
@@ -458,19 +483,26 @@ async function s5Conn(fetcher, addressType, addressRemote, portRemote, cfg) {
     });
     DST = new Uint8Array([4, ...bytes]);
   }
-  else DST = new Uint8Array([3, addressRemote.length, ...enc.encode(addressRemote)]);
+  else { const hb = enc.encode(addressRemote); if (hb.length > 255) throw new Error('S5 host too long'); DST = new Uint8Array([3, hb.length, ...hb]); }
   await writer.write(new Uint8Array([5, 1, 0, ...DST, (portRemote >> 8) & 0xff, portRemote & 0xff]));
-  resp = (await reader.read()).value;
+  resp = await rd();
   if (resp[1] !== 0) throw new Error('S5 conn failed');
   writer.releaseLock();
   reader.releaseLock();
   return socket;
+  } catch (e) {
+    try { writer?.releaseLock(); } catch {} try { reader?.releaseLock(); } catch {} try { socket.close(); } catch {}
+    throw e;
+  }
 }
 
 /* ---------- HTTP CONNECT 握手（通过 fetcher.connect；cfg.tls 走 TLS 隧道） ---------- */
 async function htConn(fetcher, addressType, addressRemote, portRemote, cfg) {
   const { username, password, hostname, port, tls } = cfg;
+  if (/[\s\r\n]/.test(String(addressRemote))) throw new Error('bad target host');   // D6：CONNECT 行注入防护
   const sock = fetcher.connect({ hostname, port }, tls ? { secureTransport: 'on' } : undefined);
+  let reader = null;
+  try {
   if (sock.opened) await sock.opened;
 
   let req = `CONNECT ${addressRemote}:${portRemote} HTTP/1.1\r\n` +
@@ -487,7 +519,7 @@ async function htConn(fetcher, addressType, addressRemote, portRemote, cfg) {
   await writer.write(new TextEncoder().encode(req));
   writer.releaseLock();
 
-  const reader = sock.readable.getReader();
+  reader = sock.readable.getReader();
   let buf = new Uint8Array(0);
 
   while (true) {
@@ -507,6 +539,10 @@ async function htConn(fetcher, addressType, addressRemote, portRemote, cfg) {
       }
       throw new Error(`Proxy refused: ${txt.split('\r\n')[0]}`);
     }
+  }
+  } catch (e) {
+    try { reader?.releaseLock(); } catch {} try { sock.close(); } catch {}
+    throw e;
   }
 }
 
@@ -741,7 +777,7 @@ const _turnQueryDns = async (hostname, type) => {
           { headers: { Accept: 'application/dns-json' } }
         ), 'TURN DNS request timed out');
         if (!response.ok) continue;
-        const data = await response.json();
+        const data = await _turnWithTimeout(response.json(), 'TURN DNS body timed out');
         const values = (data.Answer || data.answer || [])
           .filter(record => Number(record.type) === recordType)
           .map(record => String(record.data || '').replace(/\.$/, ''))
@@ -785,7 +821,8 @@ const _turnOpenNative = async (openSocket, hostname, port, tls) => {
     tls ? { secureTransport: 'on' } : undefined
   );
   if (socket.opened) {
-    await _turnWithTimeout(socket.opened, tls ? 'TURNS TLS connection timed out' : 'TURN connection timed out');
+    try { await _turnWithTimeout(socket.opened, tls ? 'TURNS TLS connection timed out' : 'TURN connection timed out'); }
+    catch (e) { try { socket.close(); } catch {} throw e; }   // F4：超时/握手失败不留半开 socket
   }
   return socket;
 };
@@ -844,15 +881,9 @@ const _turnOpenCustomTls = async (openSocket, hostname, port) => {
 
 const _turnOpenTransport = async (openSocket, cfg) => {
   if (!cfg.tls) return _turnOpenNative(openSocket, cfg.hostname, cfg.port, false);
-  if (!_turnIsIPv4(cfg.hostname) && !_turnIsIPv6(cfg.hostname)) {
-    let nativeSocket = null;
-    try {
-      nativeSocket = await _turnOpenNative(openSocket, cfg.hostname, cfg.port, true);
-      return nativeSocket;
-    } catch {
-      try { nativeSocket?.close(); } catch {}
-    }
-  }
+  // F2：域名 TURNS 只走运行时原生 TLS（校验证书）；失败即失败，不降级到不校验证书的自实现 TLS。
+  //     IP 字面量目标无 SNI/主机名可校验，运行时原生 TLS 通常握手失败 → 才使用自实现（README 已标注该形态不校验证书链）。
+  if (!_turnIsIPv4(cfg.hostname) && !_turnIsIPv6(cfg.hostname)) return _turnOpenNative(openSocket, cfg.hostname, cfg.port, true);
   return _turnOpenCustomTls(openSocket, cfg.hostname, cfg.port);
 };
 
@@ -962,7 +993,7 @@ const _turnUpdateAuth = async (auth, cfg, message) => {
   if (!nonce?.byteLength) throw new Error('TURN authentication nonce missing');
   const realm = realmBytes?.byteLength ? _turnDecoder.decode(realmBytes) : auth.realm;
   if (!realm) throw new Error('TURN authentication realm missing');
-  if (cfg.username === null || cfg.password === null) {
+  if (cfg.username == null || cfg.password == null) {
     throw new Error('TURN credentials required');
   }
   auth.username = cfg.username;
@@ -1181,7 +1212,7 @@ async function _turnConnectSingle(openSocket, cfg, targetAddress, targetPort) {
           throw error;
         }
       },
-      close,
+      close: () => dataWriter.close().catch(() => {}),   // F3：半关闭数据侧，读方向继续（对齐原生 socket 语义）
       abort: close
     });
     return {
@@ -1197,19 +1228,466 @@ async function _turnConnectSingle(openSocket, cfg, targetAddress, targetPort) {
   }
 }
 
+const TURN_TOTAL_BUDGET_MS = 20000;
 async function connectViaTurnProxy(openSocket, cfg, targetHost, targetPort, familyHint = 'domain') {
-  const targets = await _turnResolveTarget(targetHost, familyHint);
-  if (!targets.length) throw new Error('TURN target DNS resolution failed');
-  let lastError = null;
-  for (const target of targets) {
-    try {
-      return await _turnConnectSingle(openSocket, cfg, target.address, targetPort);
-    } catch (error) {
-      lastError = error;
+  // F7：Allocate 未携带 REQUESTED-ADDRESS-FAMILY（RFC 6156）→ 中继固定 IPv4，IPv6 目标必然在 CreatePermission 被拒，直接跳过
+  const targets = (await _turnResolveTarget(targetHost, familyHint === 'ipv6' ? 'ipv6' : 'ipv4')).filter(t => t.family === 'ipv4');
+  if (!targets.length) throw new Error('TURN target DNS resolution failed (IPv4 only)');
+  const run = (async () => {
+    let lastError = null;
+    for (const target of targets) {
+      try {
+        return await _turnConnectSingle(openSocket, cfg, target.address, targetPort);
+      } catch (error) {
+        lastError = error;
+      }
     }
-  }
-  throw lastError || new Error('TURN connection failed');
+    throw lastError || new Error('TURN connection failed');
+  })();
+  return _turnWithTimeout(run, 'TURN connect budget exceeded', TURN_TOTAL_BUDGET_MS);
 }
+
+/* ---------- SSTP 全局代理（移植自 cmliu/edgetunnel sstpConnect：TLS → SSTP_DUPLEX_POST → PPP LCP/PAP/IPCP → TCP-in-IP 封装） ----------
+ * 此前 'sstp' 分支只是裸 TCP 连到 sstp 主机再直写 VLESS 载荷，从未按 SSTP 协议握手（审查 F1）。
+ * 以下为逐标识符翻译（数据转Uint8Array→_turnToBytes / 拼接字节数据→_sstpCat / withTimeout→_sstpTimeout / DoH查询→_dohQRaw），逻辑未改。 */
+const SSTP_CONNECT_TIMEOUT_MS = 10000;
+const SSTP_TCP_MSS = 1400;
+const _sstpCat = (...parts) => { let n = 0; for (const p of parts) n += p.byteLength; const o = new Uint8Array(n); let k = 0; for (const p of parts) { o.set(p, k); k += p.byteLength; } return o; };
+const _sstpTimeout = (promise, timeoutMs, message) => _turnWithTimeout(promise, message, timeoutMs);
+const _sstpIsV4 = (s) => /^(25[0-5]|2[0-4]d|1?d?d)(.(25[0-5]|2[0-4]d|1?d?d)){3}$/.test(String(s || ''));
+const SSTP_EMPTY_BYTES = new Uint8Array(0);
+
+function readSstpUint16(bytes, offset = 0) {
+  return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function readSstpUint32(bytes, offset = 0) {
+  return ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+}
+
+function randomSstpUint16() {
+  return readSstpUint16(crypto.getRandomValues(new Uint8Array(2)));
+}
+
+function internetChecksum(bytes, offset, length) {
+  let sum = 0;
+  for (let index = offset; index < offset + length - 1; index += 2) sum += readSstpUint16(bytes, index);
+  if (length & 1) sum += bytes[offset + length - 1] << 8;
+  while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+  return (~sum) & 0xffff;
+}
+
+async function sstpConnect(proxy, targetHost, targetPort, openSocket) {
+  proxy = { ...proxy, username: proxy.username ?? null, password: proxy.password ?? null };
+  let bufferedBytes = SSTP_EMPTY_BYTES, pppIdentifier = 1, socket = null, reader = null, writer = null;
+  let closedSettled = false, resolveClosed, rejectClosed;
+  const closed = new Promise((resolve, reject) => {
+    resolveClosed = resolve;
+    rejectClosed = reject;
+  });
+  const settleClosed = (settle, value) => {
+    if (closedSettled) return;
+    closedSettled = true;
+    settle(value);
+  };
+  const close = () => {
+    try { reader?.cancel?.().catch?.(() => { }) } catch (e) { }
+    try { reader?.releaseLock?.() } catch (e) { }
+    try { writer?.close?.().catch?.(() => { }) } catch (e) { }
+    try { writer?.releaseLock?.() } catch (e) { }
+    try { socket?.close?.() } catch (e) { }
+    settleClosed(resolveClosed);
+  };
+
+  const readSocketChunk = async () => {
+    const { value, done } = await reader.read();
+    if (done || !value) throw new Error('SSTP socket closed');
+    return _turnToBytes(value);
+  };
+  const readBytes = async length => {
+    while (bufferedBytes.byteLength < length) {
+      const chunk = await readSocketChunk();
+      bufferedBytes = bufferedBytes.byteLength ? _sstpCat(bufferedBytes, chunk) : chunk;
+    }
+    const result = bufferedBytes.subarray(0, length);
+    bufferedBytes = bufferedBytes.subarray(length);
+    return result;
+  };
+  const readHttpLine = async () => {
+    for (; ;) {
+      const lineEnd = bufferedBytes.indexOf(10);
+      if (lineEnd >= 0) {
+        const line = _turnDecoder.decode(bufferedBytes.subarray(0, lineEnd));
+        bufferedBytes = bufferedBytes.subarray(lineEnd + 1);
+        return line.replace(/\r$/, '');
+      }
+      const chunk = await readSocketChunk();
+      bufferedBytes = bufferedBytes.byteLength ? _sstpCat(bufferedBytes, chunk) : chunk;
+    }
+  };
+  const readPacket = async (timeoutMs = SSTP_CONNECT_TIMEOUT_MS) => {
+    const header = await _sstpTimeout(readBytes(4), timeoutMs, 'SSTP read timeout');
+    const length = readSstpUint16(header, 2) & 0x0fff;
+    if (length < 4) throw new Error('Invalid SSTP packet length');
+    return {
+      isControl: (header[1] & 1) !== 0,
+      body: length > 4 ? await _sstpTimeout(readBytes(length - 4), timeoutMs, 'SSTP packet body read timeout') : SSTP_EMPTY_BYTES
+    };
+  };
+  const buildSstpDataPacket = pppFrame => {
+    const packetLength = 6 + pppFrame.byteLength;
+    const packet = new Uint8Array(packetLength);
+    packet.set([0x10, 0x00, ((packetLength >> 8) & 0x0f) | 0x80, packetLength & 0xff, 0xff, 0x03]);
+    packet.set(pppFrame, 6);
+    return packet;
+  };
+  const buildPppConfigurePacket = (protocol, code, id, options = []) => {
+    const optionsLength = options.reduce((size, option) => size + 2 + option.data.byteLength, 0);
+    const frame = new Uint8Array(6 + optionsLength);
+    const view = new DataView(frame.buffer);
+    view.setUint16(0, protocol);
+    frame[2] = code;
+    frame[3] = id;
+    view.setUint16(4, 4 + optionsLength);
+    options.reduce((offset, option) => {
+      frame[offset] = option.type;
+      frame[offset + 1] = 2 + option.data.byteLength;
+      frame.set(option.data, offset + 2);
+      return offset + 2 + option.data.byteLength;
+    }, 6);
+    return frame;
+  };
+  const parsePPPFrame = data => {
+    const offset = data.byteLength >= 2 && data[0] === 0xff && data[1] === 0x03 ? 2 : 0;
+    if (data.byteLength - offset < 4) return null;
+    const protocol = readSstpUint16(data, offset);
+    if (protocol === 0x0021) return { protocol, ipPacket: data.subarray(offset + 2) };
+    if (data.byteLength - offset < 6) return null;
+    return { protocol, code: data[offset + 2], id: data[offset + 3], payload: data.subarray(offset + 6), rawPacket: data.subarray(offset) };
+  };
+  const parsePppOptions = data => {
+    const options = [];
+    for (let offset = 0; offset + 2 <= data.byteLength;) {
+      const type = data[offset];
+      const length = data[offset + 1];
+      if (length < 2 || offset + length > data.byteLength) break;
+      options.push({ type, data: data.subarray(offset + 2, offset + length) });
+      offset += length;
+    }
+    return options;
+  };
+
+  try {
+    const serverHost = stripIPv6Brackets(proxy.hostname);
+    const serverPort = proxy.port;
+    socket = openSocket({ hostname: serverHost, port: serverPort }, { secureTransport: 'on', allowHalfOpen: false });
+    await _sstpTimeout(socket.opened, SSTP_CONNECT_TIMEOUT_MS, 'SSTP server connection timed out');
+    reader = socket.readable.getReader();
+    writer = socket.writable.getWriter();
+
+    const displayHost = serverHost.includes(':') ? `[${serverHost}]` : serverHost;
+    const httpRequest = _turnEncoder.encode(
+      `SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\r\n`
+      + `Host: ${Number(serverPort) === 443 ? displayHost : `${displayHost}:${serverPort}`}\r\n`
+      + 'Content-Length: 18446744073709551615\r\n'
+      + `SSTPCORRELATIONID: {${crypto.randomUUID()}}\r\n\r\n`
+    );
+    const encapsulatedProtocol = new Uint8Array(2);
+    new DataView(encapsulatedProtocol.buffer).setUint16(0, 1);
+    const maximumReceiveUnit = new Uint8Array(2);
+    new DataView(maximumReceiveUnit.buffer).setUint16(0, 1500);
+    const sstpConnectRequest = new Uint8Array(12 + encapsulatedProtocol.byteLength);
+    const sstpConnectView = new DataView(sstpConnectRequest.buffer);
+    sstpConnectRequest[0] = 0x10;
+    sstpConnectRequest[1] = 0x01;
+    sstpConnectView.setUint16(2, sstpConnectRequest.byteLength | 0x8000);
+    sstpConnectView.setUint16(4, 0x0001);
+    sstpConnectView.setUint16(6, 1);
+    sstpConnectRequest[9] = 1;
+    sstpConnectView.setUint16(10, 4 + encapsulatedProtocol.byteLength);
+    sstpConnectRequest.set(encapsulatedProtocol, 12);
+
+    await _sstpTimeout(writer.write(_sstpCat(
+      httpRequest,
+      sstpConnectRequest,
+      buildSstpDataPacket(buildPppConfigurePacket(0xc021, 1, pppIdentifier++, [
+        { type: 1, data: maximumReceiveUnit }
+      ]))
+    )), SSTP_CONNECT_TIMEOUT_MS, 'SSTP HTTP handshake request timed out');
+
+    const statusLine = await _sstpTimeout(readHttpLine(), SSTP_CONNECT_TIMEOUT_MS, 'SSTP HTTP handshake timed out');
+    for (; ;) {
+      const line = await _sstpTimeout(readHttpLine(), SSTP_CONNECT_TIMEOUT_MS, 'SSTP HTTP header read timed out');
+      if (line === '') break;
+    }
+    if (!/HTTP\/\d(?:\.\d)?\s+2\d\d/i.test(statusLine)) throw new Error(`SSTP HTTP handshake failed: ${statusLine || 'invalid status'}`);
+
+    let localLcpAcked = false, peerLcpAcked = false, papRequired = false, papSent = false, papDone = false, ipcpStarted = false, ipcpFinished = false, sourceIp = null;
+    const sendPapIfReady = async () => {
+      if (!localLcpAcked || !peerLcpAcked || !papRequired || papSent) return;
+      if (proxy.username === null || proxy.password === null) throw new Error('SSTP server requires PAP authentication');
+      const username = _turnEncoder.encode(proxy.username);
+      const password = _turnEncoder.encode(proxy.password);
+      if (username.byteLength > 255 || password.byteLength > 255) throw new Error('SSTP username/password is too long');
+      const papLength = 6 + username.byteLength + password.byteLength;
+      const frame = new Uint8Array(2 + papLength);
+      const view = new DataView(frame.buffer);
+      view.setUint16(0, 0xc023);
+      frame[2] = 1;
+      frame[3] = pppIdentifier++;
+      view.setUint16(4, papLength);
+      frame[6] = username.byteLength;
+      frame.set(username, 7);
+      frame[7 + username.byteLength] = password.byteLength;
+      frame.set(password, 8 + username.byteLength);
+      await _sstpTimeout(writer.write(buildSstpDataPacket(frame)), SSTP_CONNECT_TIMEOUT_MS, 'SSTP PAP authentication request timed out');
+      papSent = true;
+    };
+    const startIpcpIfReady = async () => {
+      if (!localLcpAcked || !peerLcpAcked || ipcpStarted || (papRequired && !papDone)) return;
+      await _sstpTimeout(writer.write(buildSstpDataPacket(buildPppConfigurePacket(0x8021, 1, pppIdentifier++, [
+        { type: 3, data: new Uint8Array(4) }
+      ]))), SSTP_CONNECT_TIMEOUT_MS, 'SSTP IPCP request timed out');
+      ipcpStarted = true;
+    };
+
+    for (let round = 0; round < 50 && !ipcpFinished; round++) {
+      const packet = await readPacket(SSTP_CONNECT_TIMEOUT_MS);
+      if (packet.isControl) continue;
+      const ppp = parsePPPFrame(packet.body);
+      if (!ppp) continue;
+
+      if (ppp.protocol === 0xc021) {
+        if (ppp.code === 1) {
+          const authOption = parsePppOptions(ppp.payload).find(option => option.type === 3);
+          if (authOption?.data?.byteLength >= 2) {
+            const authProtocol = readSstpUint16(authOption.data);
+            if (authProtocol !== 0xc023) throw new Error(`SSTP unsupported PPP authentication protocol: 0x${authProtocol.toString(16)}`);
+            papRequired = true;
+          }
+          const ack = new Uint8Array(ppp.rawPacket);
+          ack[2] = 2;
+          await _sstpTimeout(writer.write(buildSstpDataPacket(ack)), SSTP_CONNECT_TIMEOUT_MS, 'SSTP LCP Configure-Ack timed out');
+          peerLcpAcked = true;
+          await sendPapIfReady();
+          await startIpcpIfReady();
+        } else if (ppp.code === 2) {
+          localLcpAcked = true;
+          await sendPapIfReady();
+          await startIpcpIfReady();
+        }
+        continue;
+      }
+
+      if (ppp.protocol === 0xc023) {
+        if (ppp.code === 2) {
+          papDone = true;
+          await startIpcpIfReady();
+        } else if (ppp.code === 3) throw new Error('SSTP PAP authentication failed');
+        continue;
+      }
+
+      if (ppp.protocol === 0x8021) {
+        if (ppp.code === 1) {
+          const ack = new Uint8Array(ppp.rawPacket);
+          ack[2] = 2;
+          await _sstpTimeout(writer.write(buildSstpDataPacket(ack)), SSTP_CONNECT_TIMEOUT_MS, 'SSTP IPCP Configure-Ack timed out');
+          await startIpcpIfReady();
+        } else if (ppp.code === 3) {
+          const addressOption = parsePppOptions(ppp.payload).find(option => option.type === 3);
+          if (addressOption?.data?.byteLength === 4) {
+            sourceIp = [...addressOption.data].join('.');
+            await _sstpTimeout(writer.write(buildSstpDataPacket(buildPppConfigurePacket(0x8021, 1, pppIdentifier++, [
+              { type: 3, data: addressOption.data }
+            ]))), SSTP_CONNECT_TIMEOUT_MS, 'SSTP IPCP address request timed out');
+            ipcpStarted = true;
+          }
+        } else if (ppp.code === 2) {
+          const addressOption = parsePppOptions(ppp.payload).find(option => option.type === 3);
+          if (addressOption?.data?.byteLength === 4) sourceIp = [...addressOption.data].join('.');
+          ipcpFinished = true;
+        }
+      }
+    }
+    if (!sourceIp) throw new Error('SSTP did not assign an IPv4 address');
+
+    const target = stripIPv6Brackets(targetHost);
+    /** @type {string | null} */
+    let targetIp = _sstpIsV4(target) ? target : null;
+    if (!targetIp) {
+      const records = await _dohQRaw(target, 'A');
+      const recordData = records.find(item => item.type === 1 && _sstpIsV4(item.data))?.data;
+      targetIp = typeof recordData === 'string' ? recordData : null;
+    }
+    if (!targetIp) throw new Error(`Could not resolve ${targetHost} to an IPv4 address for SSTP`);
+
+    const sourcePort = 10000 + (randomSstpUint16() % 50000);
+    const sourceAddress = new Uint8Array(String(sourceIp || '').split('.').map(Number));
+    const destinationAddress = new Uint8Array(String(targetIp || '').split('.').map(Number));
+    let sequenceNumber = readSstpUint32(crypto.getRandomValues(new Uint8Array(4)));
+    let acknowledgementNumber = 0;
+    const ipHeaderTemplate = new Uint8Array(20);
+    ipHeaderTemplate.set([0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 64, 6]);
+    ipHeaderTemplate.set(sourceAddress, 12);
+    ipHeaderTemplate.set(destinationAddress, 16);
+    const tcpPseudoHeader = new Uint8Array(1432);
+    tcpPseudoHeader.set(sourceAddress);
+    tcpPseudoHeader.set(destinationAddress, 4);
+    tcpPseudoHeader[9] = 6;
+    const buildTcpFrame = (flags, payload = SSTP_EMPTY_BYTES) => {
+      const bytes = _turnToBytes(payload);
+      const payloadLength = bytes.byteLength;
+      const tcpLength = 20 + payloadLength;
+      const ipLength = 20 + tcpLength;
+      const sstpLength = 8 + ipLength;
+      const frame = new Uint8Array(sstpLength);
+      const view = new DataView(frame.buffer);
+      frame.set([0x10, 0x00, ((sstpLength >> 8) & 0x0f) | 0x80, sstpLength & 0xff, 0xff, 0x03, 0x00, 0x21]);
+      frame.set(ipHeaderTemplate, 8);
+      view.setUint16(10, ipLength);
+      view.setUint16(12, randomSstpUint16());
+      view.setUint16(18, internetChecksum(frame, 8, 20));
+      view.setUint16(28, sourcePort);
+      view.setUint16(30, targetPort);
+      view.setUint32(32, sequenceNumber);
+      view.setUint32(36, acknowledgementNumber);
+      frame[40] = 0x50;
+      frame[41] = flags;
+      view.setUint16(42, 65535);
+      if (payloadLength) frame.set(bytes, 48);
+      tcpPseudoHeader[10] = tcpLength >> 8;
+      tcpPseudoHeader[11] = tcpLength & 0xff;
+      tcpPseudoHeader.set(frame.subarray(28, 28 + tcpLength), 12);
+      view.setUint16(44, internetChecksum(tcpPseudoHeader, 0, 12 + tcpLength));
+      return frame;
+    };
+    const matchIncomingIpPacket = ipPacket => {
+      if (ipPacket.byteLength < 40 || ipPacket[9] !== 6) return null;
+      const ipHeaderLength = (ipPacket[0] & 0x0f) * 4;
+      if (ipPacket.byteLength < ipHeaderLength + 20) return null;
+      if (readSstpUint16(ipPacket, ipHeaderLength) !== targetPort) return null;
+      if (readSstpUint16(ipPacket, ipHeaderLength + 2) !== sourcePort) return null;
+      return {
+        flags: ipPacket[ipHeaderLength + 13],
+        sequence: readSstpUint32(ipPacket, ipHeaderLength + 4),
+        payloadOffset: ipHeaderLength + ((ipPacket[ipHeaderLength + 12] >> 4) & 0x0f) * 4
+      };
+    };
+
+    await _sstpTimeout(writer.write(buildTcpFrame(0x02)), SSTP_CONNECT_TIMEOUT_MS, 'SSTP TCP SYN write timed out');
+    sequenceNumber = (sequenceNumber + 1) >>> 0;
+    let tcpReady = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const packet = await readPacket(SSTP_CONNECT_TIMEOUT_MS);
+      if (packet.isControl) continue;
+      const ppp = parsePPPFrame(packet.body);
+      if (!ppp || ppp.protocol !== 0x0021) continue;
+      const tcp = matchIncomingIpPacket(ppp.ipPacket);
+      if (!tcp || (tcp.flags & 0x12) !== 0x12) continue;
+      acknowledgementNumber = (tcp.sequence + 1) >>> 0;
+      await _sstpTimeout(writer.write(buildTcpFrame(0x10)), SSTP_CONNECT_TIMEOUT_MS, 'SSTP TCP ACK write timed out');
+      tcpReady = true;
+      break;
+    }
+    if (!tcpReady) throw new Error('TCP handshake through SSTP timed out');
+
+    /** @type {ReadableStreamDefaultController<Uint8Array> | null} */
+    let streamController = null;
+    const readable = new ReadableStream({
+      start(controller) {
+        streamController = controller;
+      },
+      cancel() {
+        close();
+      }
+    });
+
+    (async () => {
+      try {
+        let pendingChunks = [], pendingLength = 0;
+        const flush = () => {
+          if (!pendingLength) return;
+          if (!streamController) throw new Error('SSTP readable stream is not ready');
+          streamController.enqueue(pendingChunks.length === 1 ? pendingChunks[0] : _sstpCat(...pendingChunks));
+          pendingChunks = [];
+          pendingLength = 0;
+          writer.write(buildTcpFrame(0x10)).catch(() => { });
+        };
+
+        for (; ;) {
+          const packet = await readPacket(60000);
+          if (packet.isControl) continue;
+          const ppp = parsePPPFrame(packet.body);
+          if (!ppp || ppp.protocol !== 0x0021) continue;
+          const incoming = matchIncomingIpPacket(ppp.ipPacket);
+          if (!incoming) continue;
+
+          if (incoming.payloadOffset < ppp.ipPacket.byteLength) {
+            const payload = ppp.ipPacket.subarray(incoming.payloadOffset);
+            if (payload.byteLength) {
+              acknowledgementNumber = (incoming.sequence + payload.byteLength) >>> 0;
+              pendingChunks.push(new Uint8Array(payload));
+              pendingLength += payload.byteLength;
+            }
+          }
+
+          if (incoming.flags & 0x01) {
+            flush();
+            acknowledgementNumber = (acknowledgementNumber + 1) >>> 0;
+            writer.write(buildTcpFrame(0x11)).catch(() => { });
+            const controller = streamController;
+            if (controller) {
+              try { controller.close() } catch (e) { }
+            }
+            close();
+            return;
+          }
+
+          if (bufferedBytes.byteLength < 4 || pendingLength >= 32768) flush();
+        }
+      } catch (error) {
+        const controller = streamController;
+        if (controller) {
+          try { controller.error(error) } catch (e) { }
+        }
+        settleClosed(rejectClosed, error);
+        try { socket?.close?.() } catch (e) { }
+      }
+    })();
+
+    const writable = new WritableStream({
+      async write(chunk) {
+        const bytes = _turnToBytes(chunk);
+        if (!bytes.byteLength) return;
+        if (bytes.byteLength <= SSTP_TCP_MSS) {
+          await writer.write(buildTcpFrame(0x18, bytes));
+          sequenceNumber = (sequenceNumber + bytes.byteLength) >>> 0;
+          return;
+        }
+        const frames = [];
+        for (let offset = 0; offset < bytes.byteLength; offset += SSTP_TCP_MSS) {
+          const segment = bytes.subarray(offset, Math.min(offset + SSTP_TCP_MSS, bytes.byteLength));
+          frames.push(buildTcpFrame(0x18, segment));
+          sequenceNumber = (sequenceNumber + segment.byteLength) >>> 0;
+        }
+        await writer.write(_sstpCat(...frames));
+      },
+      close() {
+        return writer.write(buildTcpFrame(0x11)).catch(() => { });
+      },
+      abort(error) {
+        close();
+        if (error) settleClosed(rejectClosed, error);
+      }
+    });
+
+    return { readable, writable, closed, close };
+  } catch (error) {
+    close();
+    throw error;
+  }
+}
+
 
 /* ---------- URL 路由解析：路径快捷方式 + 查询参数 ---------- */
 function pCfg(url, path, fbPIP = null) {
@@ -1317,7 +1795,9 @@ function pCfg(url, path, fbPIP = null) {
   //      sstp / turn 一并提升为全局：回落分支（enS==='s5'）只实现 socks5/http，
   //      若让 sstp/turn 留在回落里会走 htConn 发出错误的握手，故统一走 gP（与既有 ?turn= 一致）。
   if (s5 && !gP && (gLocal || enS === 'sstp' || enS === 'turn' || url.searchParams.has('globalproxy') || /^(?:1|true)$/i.test(url.searchParams.get('global') || ''))) {
-    gP = { type: enS === 'socks5' ? 'socks5' : enS === 'sstp' ? 'sstp' : enS === 'turn' ? 'turn' : 'http', cfg: s5 };
+    gP = enS === 'sstp' ? { type: 'sstp', cfg: { host: s5.hostname, port: s5.port, user: s5.username || 'vpn', password: s5.password || 'vpn' } }
+       : enS === 'turn' ? { type: 'turn', cfg: { hostname: s5.hostname, port: s5.port, username: s5.username ?? null, password: s5.password ?? null, tls: !!s5.tls } }
+       : { type: enS === 'socks5' ? 'socks5' : 'http', cfg: s5 };
     s5 = null; enS = null;
   }
   const pxParam = url.searchParams.get('proxyip');
@@ -1519,7 +1999,7 @@ const tryCon = async (fetcher, addrType, host, port, routeCfg, env) => {
   if (gP) {
     if (gP.type === 'socks5') return s5Conn(fetcher, addrType, host, port, gP.cfg);
     if (gP.type === 'http') return htConn(fetcher, addrType, host, port, gP.cfg);
-    if (gP.type === 'sstp') return sprout(fetcher, gP.cfg.host, gP.cfg.port);
+    if (gP.type === 'sstp') return sstpConnect({ hostname: gP.cfg.host, port: gP.cfg.port, username: gP.cfg.user ?? null, password: gP.cfg.password ?? null }, host, port, openSocket);
     if (gP.type === 'turn') {
       return connectViaTurnProxy(openSocket, gP.cfg, host, port, family);
     }
@@ -1555,13 +2035,14 @@ const tryCon = async (fetcher, addrType, host, port, routeCfg, env) => {
 };
 
 /* ---------- 队列核（GrainTCP 新版，上行/下行复用，无背压） ---------- */
+const UQ_MAX_BYTES = 16 * 1024 * 1024, UQ_MAX_ITEMS = 4096;   // D2：上行队列高水位（EDT 同款），溢出即断开而非无界增长
 const mkK = (cap, cpy = 0) => {
   let q = [], h = 0, b = 0, buf = null;
   const e = () => h >= q.length;
   const trim = () => { h > 32 && h * 2 >= q.length && (q = q.slice(h), h = 0); };
   const clear = () => { q = []; h = 0; b = 0; };
   const take = () => { if (e()) return null; const d = q[h]; q[h++] = undefined; b -= d.byteLength; trim(); return d; };
-  const sow = d => { const n = d?.byteLength || 0; return !n || (q.push(d), b += n, 1); };
+  const sow = d => { const n = d?.byteLength || 0; if (!n) return 1; if (b + n > UQ_MAX_BYTES || q.length - h >= UQ_MAX_ITEMS) return 0; q.push(d); b += n; return 1; };
   const pack = d => {
     d ||= take();
     if (!d || e()) return [d, 0];
@@ -1715,6 +2196,7 @@ async function _camouflageReverse(rawUrl, r, url, host) {
         if (_camHostBlocked(u.hostname)) return null;           // ★ F3：内部域名后缀黑名单（仅 A-8 路径）
         if (!(await _camResolveSafe(u.hostname))) return null;  // ★ F3：DoH 预解析 + 封禁段校验（fail-closed）
         const h = new Headers(r.headers);
+        for (const k of ['cookie', 'authorization', 'proxy-authorization', 'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'cf-worker', 'x-real-ip', 'x-forwarded-for', 'x-forwarded-proto', 'true-client-ip']) h.delete(k);   // P1：会话 cookie / 客户端标识不出站
         h.set('Host', u.host); h.set('Referer', u.origin); h.set('Origin', u.origin);
         const init = { method: r.method, headers: h, redirect: 'manual' };
         if (r.method !== 'GET' && r.method !== 'HEAD' && r.body) { init.body = r.body; init.duplex = 'half'; }
@@ -1768,7 +2250,7 @@ async function chainProxyCfg(req, path, env) {
     let on = '';
     try { on = String(await getSafeEnv(env, 'CHAIN_PROXY', '')); } catch (e) { on = ''; }
     if (!['1', 'true'].includes(on.toLowerCase())) return null; // ★ 默认关闭
-    const m = String(path || '').match(/\/video\/(.+)$/i);
+    const m = String(path || '').match(/(?:^|\/)video\/(.+)$/i);   // ws() 传入的 path 无前导斜杠
     if (!m) return null;
     try {
         const obj = JSON.parse(await _chainDecrypt(m[1].replace(/\/+$/, ''), CFG.id));
@@ -1863,6 +2345,7 @@ const ws = async (req, env) => {
           const host = addr(r.addrType, r.targetAddrBytes), port = r.port;
           const payload = d.subarray(r.dataOffset);
           sock = await tryCon(fetcher, r.addrType, host, port, routeCfg, env);
+          if (closed) { try { sock?.close(); } catch {} sock = null; break; }   // D3：建连期间已 wither → 关掉迟到的 socket
           if (!sock) throw wither();
           curW = sock.writable.getWriter();
           const [first] = uq.bundle(payload);
@@ -1882,7 +2365,7 @@ const ws = async (req, env) => {
   };
 
   if (ed && sow(ed)) thresh();
-  server.addEventListener('message', e => { closed || (sow(e.data) && thresh()); });
+  server.addEventListener('message', e => { closed || typeof e.data === 'string' || (sow(e.data) && thresh()); });   // D1：文本帧不入队（字符串会被 Uint8Array 当长度解析）
   server.addEventListener('close', () => wither());
   server.addEventListener('error', () => wither());
 
@@ -1990,12 +2473,14 @@ async function _cfgLoad(env) {
     try {
         const { results } = await env.DB.prepare("SELECT key, value FROM config").all();
         for (const row of (results || [])) if (row && row.key) m.set(row.key, row.value);
-    } catch(e) { obs('warn', 'd1_read_fail', { tbl: 'config' }, env); }
+    } catch(e) { obs('warn', 'd1_read_fail', { tbl: 'config' }, env); _cfgCache.map = null; _cfgCache.t = 0; return m; }   // P2：读失败不缓存空表
     _cfgCache.map = m; _cfgCache.t = Date.now();
     return m;
 }
 async function getSafeEnv(env, key, fallback) {
-    if (env[key] && env[key].trim() !== "") return env[key];
+    const ev = env ? env[key] : undefined;
+    if (typeof ev === 'string') { if (ev.trim() !== '') return ev; }
+    else if (ev !== undefined && ev !== null && typeof ev !== 'object' && typeof ev !== 'function') return String(ev);   // P2：数字/布尔型 vars 转字符串
     if (env.DB) {
         if (!_cfgFresh()) { if (!_cfgCache.p) _cfgCache.p = _cfgLoad(env).finally(() => { _cfgCache.p = null; }); await _cfgCache.p; }
         const v = _cfgCache.map && _cfgCache.map.get(key);
@@ -2125,8 +2610,10 @@ async function logAccess(env, ip, region, action) {
     const safeAction = action || '';
     if (env.DB) {
         try {
-            await env.DB.prepare("INSERT INTO logs (time, ip, region, action) VALUES (?, ?, ?, ?)").bind(time, safeIP, safeRegion, safeAction).run();
-            await env.DB.prepare("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 2000)").run();
+            const _ins = env.DB.prepare("INSERT INTO logs (time, ip, region, action) VALUES (?, ?, ?, ?)").bind(time, safeIP, safeRegion, safeAction);
+            const _del = env.DB.prepare("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 2000)");
+            if (typeof env.DB.batch === 'function') await env.DB.batch([_ins, _del]);   // 官方 D1 batch：一次往返、事务化
+            else { await _ins.run(); await _del.run(); }
         } catch (e) { obs('warn', 'd1_write_fail', { tbl: 'logs' }, env); }
     }
 }
@@ -2135,12 +2622,20 @@ async function logAccessThrottled(env, ip, region, action, ttlSeconds = 30) {
     await logAccess(env, ip, region, action);
 }
 let _statsCleanDay = '';
-async function incrementDailyStats(env) {
+// P2：每请求一次 D1 UPSERT 会在扫描流量下耗尽免费额度（100k 行写/天）→ isolate 内聚合，30s 或 200 次落一次
+let _statsPending = 0, _statsLast = 0, _statsDay = '';
+const STATS_FLUSH_MS = 30000, STATS_FLUSH_N = 200;
+async function incrementDailyStats(env, force = false) {
     const dateStr = new Date().toISOString().split('T')[0];
     let result = "0";
     if (env.DB) {
+        if (_statsDay && _statsDay !== dateStr && _statsPending) { try { await env.DB.prepare(`INSERT INTO stats (date, count) VALUES (?, ?) ON CONFLICT(date) DO UPDATE SET count = count + ?`).bind(_statsDay, _statsPending, _statsPending).run(); } catch (e) {} _statsPending = 0; }
+        _statsDay = dateStr; _statsPending += 1;
+        const now = Date.now();
+        if (!force && now - _statsLast < STATS_FLUSH_MS && _statsPending < STATS_FLUSH_N) return result;
+        const n = _statsPending; _statsPending = 0; _statsLast = now;
         try {
-            await env.DB.prepare(`INSERT INTO stats (date, count) VALUES (?, 1) ON CONFLICT(date) DO UPDATE SET count = count + 1`).bind(dateStr).run();
+            await env.DB.prepare(`INSERT INTO stats (date, count) VALUES (?, ?) ON CONFLICT(date) DO UPDATE SET count = count + ?`).bind(dateStr, n, n).run();
             if (_statsCleanDay !== dateStr) { // 过期清理每天一次，不再逐连接执行；回读 SELECT 已去除（返回值无消费方）
                 const cutoff = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
                 await env.DB.prepare("DELETE FROM stats WHERE date < ?").bind(cutoff).run();
@@ -2355,6 +2850,17 @@ async function _dashRead(env, keys) {
     } catch (e) {}
   }
   return out;
+}
+// P2：仅当键不存在时写入，随后**直读** D1（绕过 30s 缓存）返回实际值；失败返回 ''
+async function _dashWriteAbsent(env, key, value) {
+  if (!env.DB) return '';
+  try {
+    await env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").bind(key, String(value)).run();
+    const { results } = await env.DB.prepare("SELECT value FROM config WHERE key = ?").bind(key).all();
+    const v = results && results[0] && results[0].value;
+    try { cfgCacheReset(); } catch (e) {}
+    return v ? String(v) : '';
+  } catch (e) { obs('error', 'd1_write_fail', { tbl: 'config' }, env); return ''; }
 }
 async function _dashWrite(env, key, value) {
   // R1-a：返回写入是否成功（原先吞掉全部异常，调用方无法判断值是否已持久化）
@@ -2625,7 +3131,7 @@ export default {
       if (url.pathname === '/tg/webhook' && r.method === 'POST') {
         // P1-4：校验 Telegram secret_token（未配置 secret 时放行，平滑过渡）
         const _tgs = await getSafeEnv(env, 'TG_WEBHOOK_SECRET', '');
-        if (_tgs && r.headers.get('X-Telegram-Bot-Api-Secret-Token') !== _tgs) return new Response('forbidden', { status: 403 });
+        if (_tgs && !_ctEq(String(r.headers.get('X-Telegram-Bot-Api-Secret-Token') || ''), _tgs)) return new Response('forbidden', { status: 403 });
         // R4：未配置 secret 时告警（一次性；仍放行以免打断现网，收敛靠用户配置 TG_WEBHOOK_SECRET）
         // 残留#5：无 D1 时 _dashWrite 无效、_wh_secret_warned 恒读空 → 公开 POST 端点可被匿名放大成管理员 TG 骚扰
         //        故无 D1 时改用 isolate 级内存标志保证「一次性」（有 D1 时保持持久化语义）
@@ -2691,7 +3197,7 @@ export default {
         let auto = String(await getSafeEnv(env, '_AUTH_SECRET_AUTO', '') || '');
         if (!auto && env.DB) {
           const gen = _hex(crypto.getRandomValues(new Uint8Array(24)));
-          if (await _dashWrite(env, '_AUTH_SECRET_AUTO', gen)) auto = String(await getSafeEnv(env, '_AUTH_SECRET_AUTO', '') || '');
+          auto = await _dashWriteAbsent(env, '_AUTH_SECRET_AUTO', gen);   // P2：DO NOTHING + 直读，既有密钥绝不被覆盖
           if (!auto) {
             // R1-a/E5：绝不返回「未持久化的随机值」（否则每请求轮换、登录后立即掉线）。
             // E5：此分支若回退 _WEB_PW，HMAC 密钥可能仍是源码公开默认口令，与 R1-b 的 fail-closed 不一致 →
@@ -2810,6 +3316,12 @@ export default {
       }
 
       const flag = url.searchParams.get('flag');
+      // P0：Fetch Metadata 资源隔离——浏览器发起的跨站 POST（Sec-Fetch-Site=cross-site/same-site 或 Origin 不同源）一律 403；
+      //     非浏览器客户端（无这两个头）与同源页面放行。IP 白名单管理员此前无需 cookie 即可被任意网页 CSRF 改配置。
+      if (flag && r.method === 'POST') {
+        const _sfs = String(r.headers.get('Sec-Fetch-Site') || '').toLowerCase(), _org = r.headers.get('Origin');
+        if ((_sfs && _sfs !== 'same-origin' && _sfs !== 'none') || (_org && _org !== url.origin)) return new Response('403 Forbidden (cross-site)', { status: 403 });
+      }
       if (!flag && env.DB) ctx.waitUntil(incrementDailyStats(env));
       // P1-1：服务端登录/登出（HMAC 会话 cookie，HttpOnly）
       if (flag === 'login' && r.method === 'POST') {
@@ -2860,10 +3372,10 @@ export default {
           if (flag === 'get_whitelist') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const list = await getAllWhitelist(env); return new Response(JSON.stringify({ list }), { headers: { 'Content-Type': 'application/json' } }); }
           if (flag === 'add_whitelist' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await parseJSONBody(r); if(!body?.ip) return new Response(JSON.stringify({status:'error',msg:'Missing IP'}), {headers:{'Content-Type':'application/json'}}); const ipStr = body.ip.trim(); if (!/^[\d.:a-fA-F]+$/.test(ipStr) || ipStr.length > 45) return new Response(JSON.stringify({status:'error',msg:'Invalid IP format'}), {headers:{'Content-Type':'application/json'}}); const result = await addWhitelist(env, ipStr); return new Response(JSON.stringify(result.ok ? {status:'ok', ...result} : {status:'error', msg: result.errors.join(' | ') || 'No writable storage', ...result}), {headers:{'Content-Type':'application/json'}}); }
           if (flag === 'del_whitelist' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await parseJSONBody(r); if(!body?.ip) return new Response(JSON.stringify({status:'error',msg:'Missing IP'}), {headers:{'Content-Type':'application/json'}}); const result = await delWhitelist(env, body.ip.trim()); return new Response(JSON.stringify(result.ok ? {status:'ok', ...result} : {status:'error', msg: result.errors.join(' | ') || 'No writable storage', ...result}), {headers:{'Content-Type':'application/json'}}); }
-          if (flag === 'validate_tg' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await r.json(); await sendTgMsg(ctx, { TG_BOT_TOKEN: body.TG_BOT_TOKEN, TG_CHAT_ID: body.TG_CHAT_ID }, "🤖 TG 推送可用性验证", r, "配置有效", true); return new Response(JSON.stringify({success:true, msg:"验证消息已发送"}), {headers:{'Content-Type':'application/json'}}); }
-          if (flag === 'validate_cf' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await r.json(); const res = await getCloudflareUsage(body); return new Response(JSON.stringify({success:res.success, msg: res.success ? `验证通过: 总请求 ${res.total}` : `验证失败: ${res.msg}`}), {headers:{'Content-Type':'application/json'}}); }
+          if (flag === 'validate_tg' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await parseJSONBody(r); if (!body) return new Response(JSON.stringify({success:false, msg:'bad json'}), {status: 400, headers:{'Content-Type':'application/json'}}); await sendTgMsg(ctx, { TG_BOT_TOKEN: String(body.TG_BOT_TOKEN || ''), TG_CHAT_ID: String(body.TG_CHAT_ID || '') }, "🤖 TG 推送可用性验证", r, "配置有效", true); return new Response(JSON.stringify({success:true, msg:"验证消息已发送"}), {headers:{'Content-Type':'application/json'}}); }
+          if (flag === 'validate_cf' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const body = await parseJSONBody(r); if (!body) return new Response(JSON.stringify({success:false, msg:'bad json'}), {status: 400, headers:{'Content-Type':'application/json'}}); const _cfIn = {}; for (const k of ['CF_EMAIL','CF_KEY','CF_ID','CF_TOKEN','CF_ZONE_ID']) if (typeof body[k] === 'string') _cfIn[k] = body[k]; const res = await getCloudflareUsage(_cfIn); return new Response(JSON.stringify({success:res.success, msg: res.success ? `验证通过: 总请求 ${res.total}` : `验证失败: ${res.msg}`}), {headers:{'Content-Type':'application/json'}}); }
           if (flag === 'set_webhook' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const token = await getSafeEnv(env, 'TG_BOT_TOKEN', TG_BOT_TOKEN); if (!token) return new Response(JSON.stringify({success:false, msg:'未配置 TG_BOT_TOKEN'}), {headers:{'Content-Type':'application/json'}}); const webhookUrl = `https://${url.hostname}/tg/webhook`; const secret = (await getSafeEnv(env, 'TG_WEBHOOK_SECRET', '')) || _hex(crypto.getRandomValues(new Uint8Array(24))); if (env.DB) { try { await env.DB.prepare("INSERT INTO config (key, value) VALUES ('TG_WEBHOOK_SECRET', ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(secret, secret).run(); cfgCacheReset(); } catch(e) {} } const wres = await tgApi(token, 'setWebhook', { url: webhookUrl, allowed_updates: ['message'], secret_token: secret }); return new Response(JSON.stringify({success: !!(wres && wres.ok), msg: (wres && wres.ok) ? (`Webhook 已设置: ${webhookUrl}` + (env.DB ? '' : '（警告：无 D1，secret 未持久化，校验将不生效）')) : ((wres && wres.description) || '设置失败')}), {headers:{'Content-Type':'application/json'}}); }
-          if (flag === 'save_config' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); try { const body = await r.json(); const ALLOWED_KEYS = new Set(['ADD','ADDAPI','ADDCSV','ADDSUB','DLS','TG_BOT_TOKEN','TG_CHAT_ID','CF_ID','CF_TOKEN','CF_EMAIL','CF_KEY','PROXYIP','SUB_DOMAIN','SUBAPI','PS','LOGIN_PAGE_TITLE','DASHBOARD_TITLE','TG_GROUP_URL','SITE_URL','GITHUB_URL','PROXY_CHECK_URL','CLASH_CONFIG','SINGBOX_CONFIG_V11','SINGBOX_CONFIG_V12','WL_IP','ECH_ENABLED','ECH_SNI','ECH_DNS','STATS_ENABLED','STATS_CHAT_ID','CF_ZONE_ID']); for (const [k, v] of Object.entries(body)) { if (!ALLOWED_KEYS.has(k)) continue; if (env.DB) await env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(k, v, v).run(); } if (env.DB) cfgCacheReset(); return new Response(JSON.stringify({status: 'ok'}), { headers: { 'Content-Type': 'application/json' } }); } catch(e) { return new Response(JSON.stringify({status: 'error', msg: e.toString()}), { headers: { 'Content-Type': 'application/json' } }); } }
+          if (flag === 'save_config' && r.method === 'POST') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); try { const body = await r.json(); const ALLOWED_KEYS = new Set(['ADD','ADDAPI','ADDCSV','ADDSUB','DLS','TG_BOT_TOKEN','TG_CHAT_ID','CF_ID','CF_TOKEN','CF_EMAIL','CF_KEY','PROXYIP','SUB_DOMAIN','SUBAPI','PS','LOGIN_PAGE_TITLE','DASHBOARD_TITLE','TG_GROUP_URL','SITE_URL','GITHUB_URL','PROXY_CHECK_URL','CLASH_CONFIG','SINGBOX_CONFIG_V11','SINGBOX_CONFIG_V12','WL_IP','ECH_ENABLED','ECH_SNI','ECH_DNS','STATS_ENABLED','STATS_CHAT_ID','CF_ZONE_ID','NET']); const _stmts = []; for (const [k, v] of Object.entries(body || {})) { if (!ALLOWED_KEYS.has(k)) continue; if (env.DB) _stmts.push(env.DB.prepare("INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?").bind(k, String(v ?? ''), String(v ?? ''))); } try { if (_stmts.length) { if (typeof env.DB.batch === 'function') await env.DB.batch(_stmts); else for (const st of _stmts) await st.run(); } } finally { if (env.DB) cfgCacheReset(); } return new Response(JSON.stringify({status: 'ok'}), { headers: { 'Content-Type': 'application/json' } }); } catch(e) { return new Response(JSON.stringify({status: 'error', msg: e.toString()}), { headers: { 'Content-Type': 'application/json' } }); } }
       }
 
       // A-7：TLS 分片订阅参数（对齐 EDT `_ref_edgetunnel.tmp:353`）
@@ -2876,9 +3388,14 @@ export default {
       const _fragMode = String(await getSafeEnv(env, 'TLS_FRAGMENT', '')).trim().toLowerCase();
       const _fragQ = _fragMode === 'shadowrocket' ? '&fragment=' + encodeURIComponent('1,40-60,30-50,tlshello')
           : _fragMode === 'happ' ? '&fragment=' + encodeURIComponent('3,1,tlshello') : '';
+      // NET：订阅默认传输（env/D1 NET → 默认 ws）；?net=ws|xhttp 单次覆盖；转换器回源（flag= / subconverter UA）恒 ws——
+      // mihomo / sing-box 等不支持 xhttp，且回源链接若带 xhttp 会让转换后端产出无法解析的节点。
+      const _netCfg = String(await getSafeEnv(env, 'NET', NET)).trim().toLowerCase();
+      const _netQ = String(url.searchParams.get('net') || '').trim().toLowerCase();
+      const _net = (url.searchParams.has('flag') || UA_L.includes('subconverter')) ? 'ws' : ((_netQ === 'xhttp' || _netQ === 'ws') ? _netQ : (_netCfg === 'xhttp' ? 'xhttp' : 'ws'));
 
       if (_SUB_PW && url.pathname === `/${_SUB_PW}`) {
-          ctx.waitUntil(logAccess(env, clientIP, `${city},${country}`, "订阅更新"));
+          ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "订阅更新", 30));
           const isFlagged = url.searchParams.has('flag');
           if (!isFlagged) {
               try {
@@ -2895,7 +3412,7 @@ export default {
           const pathParam = requestProxyIp ? "/proxyip=" + requestProxyIp : "/";
           
           // ===== 自适应订阅：完整客户端适配（参考 EDT 2.1）=====
-          const _manualTarget = url.searchParams.get('target');
+          const _manualTarget = (t => ['clash', 'singbox', 'surge', 'quanx', 'loon', 'mixed'].includes(t) ? t : null)(String(url.searchParams.get('target') || '').toLowerCase());
           // A-4：target=mixed = 钉死「通用 base64 混合订阅」（对齐 EDT 回源约定 `_ref_edgetunnel.tmp:457`）。
           // 我们不是「忘了钉 target」而是没有 target 概念：`flag=true` 的原生路径本身即 mixed 语义。
           // 注意：若把 mixed 当成普通 target 交给转换后端，会形成「本端→后端→本端」递归，故显式判空走原生路径。
@@ -2957,7 +3474,9 @@ export default {
               // EDT 2.1 哨兵契约优先：新版生成器（sub.cmliussss.net 等）旧参数只返回占位节点。
               // 不内联重建链接（转换后端 URL 有长度上限，一百多个节点会被截断），
               // 让转换后端回源抓本端订阅端点（端点内部完成哨兵重建，输出全部节点）
-              if (host.toLowerCase() !== _SUB_DOMAIN.toLowerCase()) {
+              if (host.toLowerCase() === _SUB_DOMAIN.toLowerCase()) {
+                  _urlParam = `https://${host}/${_SUB_PW}?flag=true&target=mixed&cnIspCode=${ispCode(r)}` + (requestProxyIp ? `&proxyip=${encodeURIComponent(requestProxyIp)}` : '');
+              } else {
                   try {
                       const gen = await fetchSubGenerator('sub://' + _SUB_DOMAIN);
                       if (gen.ips.length) {
@@ -2985,13 +3504,13 @@ export default {
               for (const config of configList) {
                   const subApi = `${_CONVERTER}/${'sub?tar'+'get='}${subApiTarget}&url=${encodeURIComponent(_urlParam)}&config=${encodeURIComponent(config)}${'&emo'+'ji=true&li'+'st=false&so'+'rt=false&fd'+'n=false&sc'+'v=false'}${_cvtExtra}`;
                   try {
-                      const res = await fetch(subApi, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } });
+                      const res = await fetch(subApi, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(SUB_FETCH_TIMEOUT) });
                       if (res.ok) { lastRes = res; break; }
                   } catch(e) {}
               }
 
               if (lastRes) {
-                  let _body = await lastRes.text();
+                  let _body = await _readCapped(lastRes, SUB_BODY_MAX);
                   // ECH 精准注入：只对支持 ECH 的客户端
                   if (ECH) {
                       if (订阅类型 === 'singbox') _body = await pSB(_body, _UUID);
@@ -3003,6 +3522,7 @@ export default {
                   else _subHeaders['Content-Type'] = 'text/plain; charset=utf-8';
                   return new Response(_body, { status: 200, headers: _subHeaders });
               }
+              return new Response('subscription converter unavailable', { status: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
           }
 
           // ===== 路径B：原生订阅（v2rayN/Shadowrocket/Happ/浏览器等）=====
@@ -3015,7 +3535,7 @@ export default {
                 try {
                     const gen = await fetchSubGenerator('sub://' + _SUB_DOMAIN);
                     if (gen.ips.length) {
-                        body = (gen.links.length ? gen.links.join('\n') + '\n' : '') + genNodes(host, _UUID, requestProxyIp, gen.ips, "", null, _fragQ);
+                        body = (gen.links.length ? gen.links.join('\n') + '\n' : '') + genNodes(host, _UUID, requestProxyIp, gen.ips, "", null, _fragQ, _net);
                         success = true;
                     }
                 } catch(e) {}
@@ -3023,9 +3543,9 @@ export default {
 
             if (!success && host.toLowerCase() !== _SUB_DOMAIN.toLowerCase()) {
                 try {
-                    const res = await fetch(_subUrl, { headers: { 'User-Agent': UA } });
+                    const res = await fetch(_subUrl, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(SUB_FETCH_TIMEOUT) });
                     if (res.ok) {
-                        body = await res.text();
+                        body = await _readCapped(res, SUB_BODY_MAX);
                         success = true;
                     }
                 } catch(e) {}
@@ -3046,6 +3566,8 @@ export default {
                   let lines = decoded.split('\n').map(line => {
                     line = line.trim();
                     if (!line || !line.includes('://')) return line;
+                    // 只改写本端节点（vless + 本端 UUID）：外来透传节点（vmess/ss/trojan/他人 vless）注入 ECH/fp/PS 会直接把它们改坏
+                    if (!(/^vless:\/\//i.test(line) && line.includes(_UUID) && line.includes('?'))) return line;
                     // ECH URI 注入（v2rayN/Shadowrocket 支持）
                     const _echURI = UA_L.includes('v2'+'ray') || UA_L.includes('sha'+'dow'+'roc'+'ket') || UA_L.includes('ha'+'pp');
                     if (ECH && _echURI && !line.includes('&ech=')) {
@@ -3060,6 +3582,10 @@ export default {
                     // FP 修正
                     if (/fp=/i.test(line)) {
                       line = line.replace(/fp=[^&#]+/i, 'fp=' + FP);
+                    }
+                    // NET=xhttp：上游生成器套的是 ws 模板，仅对含本端 UUID 的行改写为 xhttp + stream-one（透传的外来节点不动）
+                    if (_net === 'xhttp' && line.includes(_UUID) && /[?&]type=ws(?=&|#|$)/i.test(line) && !/[?&]mode=/i.test(line)) {
+                      line = line.replace(/([?&])type=ws(?=&|#|$)/i, '$1type=xhttp&mode=stream-one');
                     }
                     // PS 后缀
                     if (_PS) {
@@ -3080,7 +3606,7 @@ export default {
           // ===== 兜底：本地生成 =====
           const allIPs = await getCustomIPs(env, _DLS, url, r, _agg.ips.length > 0);
           const _fbIPs = _agg.ips.length ? [...new Set(allIPs.concat(_agg.ips))] : allIPs;
-          const listText = genNodes(host, _UUID, requestProxyIp, _fbIPs, _PS, _agg.pipSet, _fragQ);
+          const listText = genNodes(host, _UUID, requestProxyIp, _fbIPs, _PS, _agg.pipSet, _fragQ, _net);
           const fallbackBody = btoa(unescape(encodeURIComponent(_aggPrefix + listText)));
           _subHeaders['Content-Type'] = 'text/plain; charset=utf-8';
           return new Response(fallbackBody, { status: 200, headers: _subHeaders });
@@ -3093,7 +3619,8 @@ export default {
           if (baseLink) {
               const reqToken = url.searchParams.get('token');
               const expectedToken = _SUB_TOKEN;
-              if (expectedToken && reqToken !== expectedToken) {
+              // 未配置 SUB_TOKEN → 端点关闭（fail-closed）；配置后须常量时间比较
+              if (!expectedToken || !_ctEq(String(reqToken || ''), expectedToken)) {
                   ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "裂变订阅失败(Token错误)", 30));
                   const errNode = `${'vl'+'ess'}://00000000-0000-0000-0000-000000000000@127.0.0.1:80?${'enc'+'ryption'}=none&${'secu'+'rity'}=none&type=tcp#${encodeURIComponent('❌ Token验证失败')}`;
                   return new Response(btoa(errNode), { headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
@@ -3140,7 +3667,7 @@ export default {
                       if (baseLink.startsWith('vl'+'ess://')) {
                           const u = new URL(baseLink);
                           const origHost = u.hostname;
-                          u.hostname = ip; u.port = port;
+                          u.hostname = formatHostForUrl(ip); u.port = port;
                           u.hash = nodeName || ip;
                           if (!u.searchParams.has('host')) u.searchParams.set('host', origHost);
                           if (!u.searchParams.has('sni')) u.searchParams.set('sni', origHost);
@@ -3187,7 +3714,7 @@ export default {
               && url.searchParams.get('uuid') === '00000000-0000-4000-8000-000000000000'
               && UA_L.includes('tunnel (https://github.com/');
           const requestUUID = url.searchParams.get('uuid');
-          if (!_BEST_SUB && (!requestUUID || requestUUID.toLowerCase() !== _UUID.toLowerCase())) {
+          if (!_BEST_SUB && (!requestUUID || !_ctEq(requestUUID.toLowerCase(), _UUID.toLowerCase()))) {
               ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "常规订阅失败(UUID错误)", 30));
               return new Response('Invalid UUID', { status: 403 });
           }
@@ -3199,7 +3726,13 @@ export default {
           const _agg2 = await getAggregated(env);
           const allIPs = await getCustomIPs(env, _DLS, url, r, _agg2.ips.length > 0); // 传入 DLS
           const _regIPs = _agg2.ips.length ? [...new Set(allIPs.concat(_agg2.ips))] : allIPs;
-          const listText = genNodes(host, _UUID, proxyIp, _regIPs, _PS, _agg2.pipSet, _fragQ);
+          // A-1：作为上游优选订阅生成器被调用时，输出 EDT 哨兵契约形态（AGG_ID@ip:port … host=example.com&sni=example.com&path=%2F），
+          // 由调用方按自身 UUID/域名重建；绝不输出真实 UUID / ProxyIP / ECH（对齐 EDT `_ref …:452-455`）
+          if (_BEST_SUB) {
+              const _bstOut = genNodes(AGG_HOST, AGG_ID, '', _regIPs, '', null, '', 'ws', true);
+              return new Response(btoa(unescape(encodeURIComponent(_bstOut))), { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+          }
+          const listText = genNodes(host, _UUID, proxyIp, _regIPs, _PS, _agg2.pipSet, _fragQ, _net);
           let _regBody = (_agg2.links.length ? _agg2.links.join('\n') + '\n' : '') + listText;
           // A-3：替换必须在 base64 之前；EDT 在 UA 含 subconverter 时跳过（转换后端需稳定回源）
           if (_rndHosts.length && !UA_L.includes('subconverter')) _regBody = _randHostBody(_regBody, host, _rndHosts);
@@ -3298,18 +3831,18 @@ function _randHostBody(body, base, hosts) {
   });
 }
 
-function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet, fragQ = '') {
+function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet, fragQ = '', net = 'ws', bare = false) {
   let echParam = '';
-  if (ECH) {
+  if (ECH && !bare) {
     echParam = `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}`;
   }
-  const commonUrlPart = `?enc`+`ryption=none&secu`+`rity=tls&sni=${host}&fp=${FP}&alpn=h3&type=ws&host=${host}` + echParam;
+  const commonUrlPart = `?enc`+`ryption=none&secu`+`rity=tls&sni=${host}&fp=${FP}&alpn=h3&type=${net === 'xhttp' ? 'xhttp' : 'ws'}&host=${host}` + (net === 'xhttp' ? '&mode=stream-one' : '') + echParam;
   const separator = psName ? ` ${psName}` : '';
   const result = [];
   if (!customIPs || customIPs.length === 0) {
       const path = proxyIP ? `/proxyip=${proxyIP}` : "/";
       const nodeName = `${psName || 'Worker'} - Default`;
-      const defaultHost = formatHostForUrl(proxyIP || host);
+      const defaultHost = formatHostForUrl(host);
       const vLink = `${P_V}://${uuid}@${defaultHost}:443${commonUrlPart}&path=${encodeURIComponent(path)}${fragQ}#${encodeURIComponent(nodeName)}`;
       return vLink;
   }
@@ -3321,7 +3854,7 @@ function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet, fragQ = '') {
       let path = proxyIP ? `/proxyip=${proxyIP}` : "/";
       // ADDSUB 的 ?proxyip=true：该地址既作入口又作反代，path 换成 /proxyip=<自身>
       if (pipSet && pipSet.size) {
-          for (const p of pipSet) { if (p && p.includes(ip)) { path = `/proxyip=${p}`; break; } }
+          for (const p of pipSet) { if (p && parseAddressPort(p)[0] === ip) { path = `/proxyip=${p}`; break; } }
       }
       let nodeName = uniqueName || ip; if (psName) nodeName = `${nodeName}${separator}`;
       const vLink = `${P_V}://${uuid}@${formatHostForUrl(ip)}:${port}${commonUrlPart}&path=${encodeURIComponent(path)}${fragQ}#${encodeURIComponent(nodeName)}`;
@@ -3423,11 +3956,11 @@ async function getCustomIPs(env, dlsThreshold, url = null, req = null, aggHasIPs
     const grab = async (url) => {
         try {
             const res = await fetch(url.trim(), { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(AGG_TIMEOUT) });
-            return res.ok ? await res.text() : '';
+            return res.ok ? await _readCapped(res, SUB_BODY_MAX) : '';
         } catch (e) { return ''; }
     };
-    const apiUrls = addApiUrls(await getSafeEnv(env, 'ADDAPI', ""));
-    const csvUrls = addApiUrls(await getSafeEnv(env, 'ADDCSV', ""));
+    const apiUrls = addApiUrls(await getSafeEnv(env, 'ADDAPI', "")).slice(0, SUB_SRC_MAX);
+    const csvUrls = addApiUrls(await getSafeEnv(env, 'ADDCSV', "")).slice(0, SUB_SRC_MAX);
     const [apiTexts, csvTexts] = await Promise.all([Promise.all(apiUrls.map(grab)), Promise.all(csvUrls.map(grab))]);
     for (const text of apiTexts) { text && text.split('\n').forEach(line => { const trimmed = line.trim(); if (trimmed && !trimmed.startsWith('#')) allIPs.push(trimmed); }); }
     for (const text of csvTexts) {
@@ -3504,7 +4037,7 @@ const _aggTag = (s, tag) => !tag ? s : (s.includes('#') ? s + ' [' + tag + ']' :
 
 const _aggTagLinks = (text, tag) => !tag ? text : text.replace(
     /([a-z][a-z0-9+\-.]*:\/\/[^\r\n]*?)(\r?\n|$)/gi,
-    (m, link, eol) => link + encodeURIComponent(link.includes('#') ? ' [' + tag + ']' : '#[' + tag + ']') + eol
+    (m, link, eol) => link + (link.includes('#') ? encodeURIComponent(' [' + tag + ']') : '#' + encodeURIComponent('[' + tag + ']')) + eol
 );
 
 // 双编码解码（UTF-8 / GBK，以 U+FFFD 替换字符判断编码是否猜对）
@@ -3523,8 +4056,9 @@ const _aggDecode = (buf, ctype) => {
 // base64 盲试：长度为 4 的倍数 + 仅含 base64 字母表 + 解码成功
 // 复用 b64uToU8 手动查表解码，不引入新的解码函数特征
 const _aggUnb64 = (text) => {
-    const c = String(text || '').replace(/\s/g, '');
-    if (!c.length || c.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(c)) return text;
+    let c = String(text || '').replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    if (!c.length || !/^[A-Za-z0-9+/]+={0,2}$/.test(c)) return text;
+    c = c.replace(/=+$/, ''); c += '='.repeat((4 - c.length % 4) % 4);
     const b = b64uToU8(c);
     if (!b || !b.length) return text;
     try {
@@ -5629,22 +6163,22 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, 
                 <div class="card">
                     <div class="card-title"><span class="icon">🚀</span> 快速订阅</div>
                     <div class="input-group-row" style="margin-bottom:15px">
-                        <input type="text" id="autoSub" value="${defaultSubLink}" readonly style="flex:1">
+                        <input type="text" id="autoSub" value="${safeVal(defaultSubLink)}" readonly style="flex:1">
                         <button class="btn btn-secondary" onclick="copyId('autoSub')">复制</button>
                         <button class="btn btn-primary" onclick="testAutoSub()">测试</button>
                     </div>
                     <div class="input-block">
                         <label>订阅源地址 (Sub Domain)</label>
-                        <input type="text" id="subDom" value="${subdomain}" oninput="updateLink()">
+                        <input type="text" id="subDom" value="${safeVal(subdomain)}" oninput="updateLink()">
                     </div>
                     <div class="input-block">
                         <label>Worker 域名 (SNI/Host)</label>
-                        <input type="text" id="hostDom" value="${host}" oninput="updateLink()">
+                        <input type="text" id="hostDom" value="${safeVal(host)}" oninput="updateLink()">
                     </div>
                     <div class="input-block">
                         <label>中转cdn地址 (cdn访问path路径)</label>
                         <div class="input-group-row">
-                            <input type="text" id="pIp" value="${proxyip}" oninput="updateLink()">
+                            <input type="text" id="pIp" value="${safeVal(proxyip)}" oninput="updateLink()">
                             <!-- 👇 修改：传入 proxyCheckUrl -->
                             <button class="btn btn-primary" onclick="checkProxy()">检测</button>
                         </div>
