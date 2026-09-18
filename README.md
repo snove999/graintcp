@@ -4,8 +4,8 @@
 harness_total=374
 file.worker.js.bytes=411064
 file.worker.js.sha256_12=800c4f73288a
-file.snippets.js.bytes=32711
-file.snippets.js.sha256_12=d34ed45edfb4
+file.snippets.js.bytes=32651
+file.snippets.js.sha256_12=84f059cb81d1
 file.worker.obf.js.bytes=959689
 file.worker.obf.js.sha256_12=fcfe450f6bca
 -->
@@ -15,7 +15,7 @@ file.worker.obf.js.sha256_12=fcfe450f6bca
 | 文件 | 部署目标 | 定位 |
 |---|---|---|
 | `worker.js` | Cloudflare **Workers** | 全功能版明文源码：管理面板、D1 持久化、TG 用量推送、订阅聚合 |
-| `snippets.js` | Cloudflare **Snippets**（付费计划规则引擎） | 轻量版明文源码：受官方 32KB / 5ms / 2MB / 子请求配额限制，专注代理与订阅本体，无面板。**Snippets 的唯一部署件**（当前 32711B，余量 57B） |
+| `snippets.js` | Cloudflare **Snippets**（付费计划规则引擎） | 轻量版明文源码：受官方 32KB / 5ms / 2MB / 子请求配额限制，专注代理与订阅本体，无面板。**Snippets 的唯一部署件**（当前 32651B，余量 117B） |
 | `worker.obf.js` | Cloudflare **Workers** | **Workers 的部署件**（`wrangler.jsonc` 的 `main` 指向它），与明文版行为一致（同一回归套件验证） |
 | `wrangler.jsonc` / `schema.sql` | Workers | wrangler 部署配置 / D1 建表脚本 |
 | `GrainTCP.js` | 参考 | 上游内核参考快照（部署文件内已内嵌，无需单独部署） |
@@ -199,7 +199,7 @@ wrangler deploy
 
 ## Snippets 部署
 
-1. 前提：**付费计划**（Free 无 Snippets）。官方限额（[developers.cloudflare.com/rules/snippets](https://developers.cloudflare.com/rules/snippets/)）：**包体 32KB、CPU 5ms、内存 2MB、无环境变量/绑定/日志**；**子请求配额 Pro 2 / Business 3 / Enterprise 5**（重定向链每跳各计 1 次）。`snippets.js` 当前 32711B，余量 57B。
+1. 前提：**付费计划**（Free 无 Snippets）。官方限额（[developers.cloudflare.com/rules/snippets](https://developers.cloudflare.com/rules/snippets/)）：**包体 32KB、CPU 5ms、内存 2MB、无环境变量/绑定/日志**；**子请求配额 Pro 2 / Business 3 / Enterprise 5**（重定向链每跳各计 1 次）。`snippets.js` 当前 32651B，余量 117B。
 2. 规则 → Snippets → 新建，粘贴 `snippets.js` 全文，绑定到你的 hostname（如 `*.{你的域}/*`），Deploy 即生效（该域名必须是橙云代理记录）。
 3. 配置全部在文件头 8 行：
    - 第 1 行：`UUID`、`SUB_PWD`（订阅密码路径）、`ADF`（推广行过滤正则）、**`SRQ`（你的计划的子请求配额，默认 2=Pro）**、**`NET`（base64 订阅默认传输：`ws` 或 `xhttp`）**
@@ -210,7 +210,7 @@ wrangler deploy
 
 **编辑器 TS 诊断说明**：VS Code 对 `.js` 开启 checkJs 时会报 `IdentityTransformStream` / `WebSocketPair` / `Uint8Array.fromBase64` / `Response({webSocket})` 未知，这是 TypeScript 内置 lib 没有 Cloudflare Workers 运行时类型所致，不影响运行；安装 `@cloudflare/workers-types` 或关闭 checkJs 即可消除。其余可修的诊断（布尔/数组类型收窄、`charCodeAt(0)`、spread 参数）已修。
 
-**Snippets 侧其余适配**：xHTTP 上行背压阈值 256KB、gRPC 重组缓冲上限 512KB（2MB 内存）；WS 侧 cmd=2（UDP）直接关闭；早数据 `Uint8Array.fromBase64` 解码失败回退手动解码（不再 500）；GET 下行（stream-up / packet-up 的 downlink）返回 404（无跨请求状态）。
+**Snippets 侧其余适配**：xHTTP 上行背压阈值 256KB、gRPC 重组缓冲上限 512KB（2MB 内存）；WS 侧 cmd=2（UDP）直接关闭；早数据 `Uint8Array.fromBase64` 解码失败回退手动解码（不再 500）；所有未命中路径统一 404 并提示正确订阅写法（`/sub?uuid=<UUID>` 或 `/<SUB_PWD>`；Snippets 无跨请求状态，xHTTP GET 下行不可用，xhttp 节点须 `mode=stream-one`）。
 
 ## 混淆版本说明
 
