@@ -17,6 +17,7 @@ _verify/
 
 # 回归脚本运行时生成物（harness 会写入仓库根目录）
 _snippets_xh.mjs
+_snippets_srq3.mjs
 
 # 内部补丁脚本（一次性手术脚本，已执行完毕）
 _surgery_*.cjs
@@ -24,3 +25,6 @@ _worker_*_patch.cjs
 
 # 独立子项目（另行管理）
 pages-sub-page/
+
+# 上游参考克隆（本地对比用，不入库）
+_ref/

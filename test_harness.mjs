@@ -2544,6 +2544,153 @@ console.log('\n===== 第十二/十三轮 F3/F4-a/F4-b + URL 回退 =====');
   }
 }
 
+// ================= 18. Snippets 平台适配（官方限额对齐：子请求配额 SRQ / 2MB / gRPC 紧凑版 / A-6 / P1-11 / fromBase64 回退） =================
+console.log('\n===== Snippets 平台适配 =====');
+{
+  const SN = await import(pathToFileURL(DIR + 'snippets.js').href);
+  const SRC = readFileSync(DIR + 'snippets.js', 'utf8');
+  const S_UUID = extractUuid(SRC.split('\n')[0]);
+  const emptyDoh = async (url, opts) => { const u = String(url instanceof URL ? url : url?.url || url); if (/dns-query|\/resolve/.test(u) && /[?&]name=/.test(u)) return new RealResponse(JSON.stringify({ Answer: [] }), { status: 200 }); return realFetch(url, opts); };
+  globalThis.fetch = emptyDoh;
+  const catU8 = parts => { let n = 0; for (const p of parts) n += p.length; const o = new Uint8Array(n); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o; };
+  const eqU8 = (a, b) => !!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]);
+  const mkFetcher = () => ({ connect(a) { const sock = makeTargetSocket(typeof a === 'string' ? a : a.hostname, (a && a.port) || 443); connectLog.push(sock); return sock; } });
+  const wsReq = (url, frame) => stubRequest(url, { 'Upgrade': 'websocket', ...(frame ? { 'sec-websocket-protocol': Buffer.from(frame).toString('base64url') } : {}) });
+
+  // 18.1 P1-11：WS 侧 cmd=2（UDP）→ 拒绝并关闭，不建连（对齐 worker parseVP）
+  try {
+    connectLog = []; __pairs.length = 0;
+    const fr = vlessFrame(S_UUID, 'udp-ws.org', 53); fr[18] = 2;
+    const res = await SN.default.fetch(wsReq('https://w.test/', fr));
+    await sleep(120);
+    const pair = __pairs[__pairs.length - 1];
+    check('snippets WS cmd=2(UDP) → 关闭且不建连（P1-11 对齐）', res.status === 101 && pair.server._closed && connectLog.length === 0, `closed=${pair.server._closed} conn=${connectLog.length}`);
+  } catch (e) { check('snippets WS cmd=2 测试', false, e.message); }
+
+  // 18.2 早数据：fromBase64 对非法输入抛错 → 回退手动解码（原实现会把 WS IIFE 打成 500）
+  try {
+    const orig = Uint8Array.fromBase64;
+    Uint8Array.fromBase64 = () => { throw new SyntaxError('bad base64'); };
+    try {
+      __pairs.length = 0;
+      const res = await SN.default.fetch(stubRequest('https://w.test/', { 'Upgrade': 'websocket', 'sec-websocket-protocol': 'not-base64!!' }));
+      check('snippets 早数据 fromBase64 抛错 → 回退手动解码，101 而非 500', res.status === 101, String(res.status));
+    } finally { if (orig) Uint8Array.fromBase64 = orig; else delete Uint8Array.fromBase64; }
+  } catch (e) { check('snippets 早数据回退测试', false, e.message); }
+
+  // 18.3 A-6：g 前缀 / turn= sstp= 提升全局 / 查询参数族 / ?global=1（首个 connect 目标即可判定全局与否）
+  const routeCase = async (name, url, expectHost, expectPort) => {
+    connectLog = []; __pairs.length = 0;
+    const res = await SN.default.fetch(wsReq(url, vlessFrame(S_UUID, 'tgt-a6.org', 443, new Uint8Array([1]))));
+    await sleep(120);
+    const first = connectLog[0];
+    check(name, res.status === 101 && !!first && first.host === expectHost && first.port === expectPort, connectLog.map(s => s.host + ':' + s.port).join(',') || 'no connect');
+  };
+  await routeCase('snippets A-6 /gs5= → 全局 socks5（先连代理，不直连目标）', 'https://w.test/gs5=u:p@s5-global.test:1080', 's5-global.test', 1080);
+  await routeCase('snippets A-6 /s5=（无 g）→ 仍先直连目标（回落语义不变）', 'https://w.test/s5=u:p@s5-fb.test:1080', 'tgt-a6.org', 443);
+  await routeCase('snippets A-6 /ghttp= → 全局 HTTP CONNECT', 'https://w.test/ghttp=u:p@http-global.test:8080', 'http-global.test', 8080);
+  await routeCase('snippets A-6 /sstp= → 提升为全局（连 sstp 主机 443）', 'https://w.test/sstp=sstp-a6.test', 'sstp-a6.test', 443);
+  await routeCase('snippets A-6 /x/gsstp=host:8443 → 路径中段 g 前缀', 'https://w.test/x/gsstp=sstp-mid.test:8443', 'sstp-mid.test', 8443);
+  await routeCase('snippets A-6 ?socks5=…&global=1 → 全局', 'https://w.test/?socks5=u:p@s5-q.test:1081&global=1', 's5-q.test', 1081);
+  await routeCase('snippets A-6 ?https= → 回落（先直连目标）', 'https://w.test/?https=u:p@h-q.test', 'tgt-a6.org', 443);
+  await routeCase('snippets A-6 /x/s5= 路径中段（无 g）→ 先直连（反代兜底腿保留）', 'https://w.test/x/s5=u:p@s5-mid.test:1080', 'tgt-a6.org', 443);
+
+  // 18.4 gRPC（Xray gun）紧凑版：与 worker 的 XH_GFR/XH_GDEC 交叉验证
+  const gReqS = (chunks) => { let ctrl; const body = new ReadableStream({ start(c) { ctrl = c; for (const ch of chunks) c.enqueue(ch); } }); return { req: { url: 'https://w.test/grpc', method: 'POST', headers: { get: k => ({ 'content-type': 'application/grpc' })[k.toLowerCase()] ?? null }, body, cf: {}, fetcher: mkFetcher() }, close: () => { try { ctrl.close(); } catch {} } }; };
+  const G_REPLY = Uint8Array.from([0x16, 3, 1, 0xab]);
+  try {
+    connectLog = [];
+    const payload = Uint8Array.from([9, 8, 7]);
+    const { req, close } = gReqS([WK.XH_GFR(vlessFrame(S_UUID, 'grpc-sn.org', 443, payload))]);
+    const res = await SN.default.fetch(req);
+    await sleep(150);
+    const sock = connectLog.find(s => s.host === 'grpc-sn.org');
+    check('snippets gRPC 正路径：建连目标正确', !!sock && sock.port === 443, connectLog.map(s => s.host + ':' + s.port).join(','));
+    check('snippets gRPC 正路径：上行剥帧后仅 payload 透传远端', !!sock && eqU8(catU8(sock.written), payload), sock ? JSON.stringify(Array.from(catU8(sock.written))) : 'no sock');
+    check('snippets gRPC 正路径：响应 CT=application/grpc + grpc-status:0', res.status === 200 && res.headers.get('content-type') === 'application/grpc' && res.headers.get('grpc-status') === '0', res.status + ' ' + res.headers.get('content-type'));
+    const rdr = res.body.getReader();
+    const first = await rdr.read();
+    const d1 = WK.XH_GDEC(first.value);
+    check('snippets gRPC 正路径：下行首帧封帧 = [0,0]（worker 解码器可解、无残留）', d1.out.length === 1 && eqU8(d1.out[0], Uint8Array.from([0, 0])) && d1.rest.length === 0, JSON.stringify(first.value && Array.from(first.value)));
+    sock._push(G_REPLY.slice()); // 字节流会分离入队 buffer，推副本保住对照值
+    const second = await rdr.read();
+    const d2 = WK.XH_GDEC(second.value);
+    check('snippets gRPC 正路径：下行数据封帧 = 远端应答', d2.out.length === 1 && eqU8(d2.out[0], G_REPLY), JSON.stringify(second.value && Array.from(second.value)));
+    close();
+  } catch (e) { check('snippets gRPC 正路径测试', false, e.message); }
+  try {
+    connectLog = [];
+    const hp = Uint8Array.from([5, 5, 5, 5, 5, 5]);
+    const hf = WK.XH_GFR(vlessFrame(S_UUID, 'grpc-half-sn.org', 443, hp));
+    const { req, close } = gReqS([hf.subarray(0, 7), hf.subarray(7, 20), hf.subarray(20)]);
+    const res = await SN.default.fetch(req);
+    await sleep(150);
+    const sock = connectLog.find(s => s.host === 'grpc-half-sn.org');
+    check('snippets gRPC 半包跨块重组：payload 完整透传', res.status === 200 && !!sock && eqU8(catU8(sock.written), hp), sock ? JSON.stringify(Array.from(catU8(sock.written))) : 'no sock/' + res.status);
+    close();
+  } catch (e) { check('snippets gRPC 半包测试', false, e.message); }
+  try {
+    connectLog = [];
+    const { req, close } = gReqS([catU8([WK.XH_GFR(vlessFrame(S_UUID, 'grpc-multi-sn.org', 443, Uint8Array.from([1, 2]))), WK.XH_GFR(Uint8Array.from([3, 4]))])]);
+    const res = await SN.default.fetch(req);
+    await sleep(150);
+    const sock = connectLog.find(s => s.host === 'grpc-multi-sn.org');
+    check('snippets gRPC 两帧粘包（握手帧+数据帧同块）：远端收到 1,2,3,4', res.status === 200 && !!sock && eqU8(catU8(sock.written), Uint8Array.from([1, 2, 3, 4])), sock ? JSON.stringify(Array.from(catU8(sock.written))) : 'no sock/' + res.status);
+    close();
+  } catch (e) { check('snippets gRPC 粘包测试', false, e.message); }
+  try {
+    connectLog = [];
+    const { req } = gReqS([Uint8Array.from([0, 0xff, 0xff, 0xff, 0xff, 10, 1])]);
+    const body = new ReadableStream({ start(c) { c.enqueue(Uint8Array.from([0, 0xff, 0xff, 0xff, 0xff, 10, 1])); c.close(); } });
+    const res = await SN.default.fetch({ ...req, body });
+    check('snippets gRPC 非法帧长（> 4MiB）→ 回退 xhF 后 400，不挂起、不建连', res.status === 400 && connectLog.length === 0, String(res.status));
+  } catch (e) { check('snippets gRPC 非法帧长测试', false, e.message); }
+
+  // 18.5 子请求配额 SRQ（官方：Pro 2 / Business 3 / Enterprise 5）：SRQ≥3 时 /proxyip=域名 先查 TXT 池（EDT 对齐）
+  try {
+    const src3 = SRC.replace(/,SRQ=2;/, ',SRQ=3;');
+    if (src3 === SRC) throw new Error('SRQ 锚点缺失');
+    writeFileSync(DIR + '_snippets_srq3.mjs', src3);
+    const SN3 = await import(pathToFileURL(DIR + '_snippets_srq3.mjs').href);
+    globalThis.fetch = async (url) => { const u = String(url instanceof URL ? url : url?.url || url); const m = u.match(/[?&]name=([^&]+)&type=([A-Za-z]+)/); if (m && /dns-query/.test(u)) { const n = decodeURIComponent(m[1]).toLowerCase(); return new RealResponse(JSON.stringify(n === 'pool3.test' && m[2] === 'TXT' ? { Answer: [{ type: 16, data: '"7.7.7.7:2053"' }] } : {}), { status: 200 }); } return new RealResponse('nf', { status: 404 }); };
+    const failing = (hosts) => ({ connect(a) { const host = typeof a === 'string' ? a : a.hostname; const port = typeof a === 'string' ? 443 : (a.port ?? 443); const s = makeTargetSocket(host, port); if (hosts.includes(host)) s.opened = Promise.reject(new Error('blocked')); connectLog.push(s); return s; } });
+    connectLog = []; __pairs.length = 0;
+    const req = wsReq('https://w.test/proxyip=pool3.test'); req.fetcher = failing(['srq-target.org']);
+    await SN3.default.fetch(req);
+    __pairs[__pairs.length - 1].server._onmessage(vlessFrame(S_UUID, 'srq-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('snippets SRQ=3：/proxyip=域名（无 !txt）→ 直连失败后先查 TXT 池再连（EDT 对齐）', connectLog.some(s => s.host === '7.7.7.7' && s.port === 2053) && !connectLog.some(s => s.host === 'pool3.test'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    connectLog = []; __pairs.length = 0;
+    const req2 = wsReq('https://w.test/proxyip=pool3.test'); req2.fetcher = failing(['srq-target.org']);
+    await SN.default.fetch(req2);
+    __pairs[__pairs.length - 1].server._onmessage(vlessFrame(S_UUID, 'srq-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('snippets SRQ=2：同请求不查 TXT，直接 connect 主机名（Pro 配额 2 内）', connectLog.some(s => s.host === 'pool3.test') && !connectLog.some(s => s.host === '7.7.7.7'), connectLog.map(s => s.host + ':' + s.port).join(','));
+    connectLog = []; __pairs.length = 0; let dohCalls = 0; const pf = globalThis.fetch; globalThis.fetch = async (u, o) => { dohCalls++; return pf(u, o); };
+    const req3 = wsReq('https://w.test/proxyip=9.9.9.9'); req3.fetcher = failing(['srq-target.org']);
+    await SN3.default.fetch(req3);
+    __pairs[__pairs.length - 1].server._onmessage(vlessFrame(S_UUID, 'srq-target.org', 443, new Uint8Array([7])));
+    await sleep(300);
+    check('snippets SRQ=3：proxyip 为字面 IP → 不发起 DoH', dohCalls === 0 && connectLog.some(s => s.host === '9.9.9.9'), `doh=${dohCalls} ` + connectLog.map(s => s.host + ':' + s.port).join(','));
+  } catch (e) { check('snippets SRQ 配额测试', false, e.message); }
+
+  // 18.6 订阅侧配额：本请求 fetch 总数不超过 SRQ（ECH / 备用模板按剩余配额回源）
+  try {
+    const calls = [];
+    globalThis.fetch = async (url) => { const u = String(url instanceof URL ? url : url?.url || url); calls.push(u); if (/dns-query|query-dns/.test(u)) return new RealResponse('x', { status: 500 }); if (/1\.11\.x/.test(u)) return new RealResponse('not json', { status: 200 }); if (/1\.12\.x/.test(u)) return new RealResponse(JSON.stringify({ outbounds: [{ type: 'vless', uuid: S_UUID, tls: { enabled: true } }] }), { status: 200 }); return new RealResponse('nf', { status: 404 }); };
+    const res = await SN.default.fetch(stubRequest('https://w.test/sub?uuid=' + S_UUID, { 'User-Agent': 'sing-box 1.12' }));
+    const txt = await res.text();
+    const echCalls = calls.filter(u => /dns-query|query-dns/.test(u)).length;
+    check('snippets 订阅配额 SRQ=2：singbox 主模板失败→备用模板(第 2 次)→跳过 ECH 回源（不超配额）', res.status === 200 && calls.length === 2 && echCalls === 0 && txt.includes('"outbounds"'), `calls=${calls.length} ech=${echCalls} status=${res.status}`);
+    calls.length = 0;
+    globalThis.fetch = async (url) => { const u = String(url instanceof URL ? url : url?.url || url); calls.push(u); if (/dns-query|query-dns/.test(u)) return new RealResponse('x', { status: 500 }); return new RealResponse('proxies:\n  - {name: a, type: vless, server: 1.1.1.1, port: 443, uuid: ' + S_UUID + '}\n', { status: 200 }); };
+    const res2 = await SN.default.fetch(stubRequest('https://w.test/sub?uuid=' + S_UUID, { 'User-Agent': 'clash-verge' }));
+    await res2.text();
+    check('snippets 订阅配额 SRQ=2：clash 转换器 1 次 + ECH 1 次，ECH 失败不再打备用 DoH（≤2）', res2.status === 200 && calls.length === 2, `calls=${calls.length} ${calls.map(u => u.slice(0, 40)).join(' | ')}`);
+  } catch (e) { check('snippets 订阅配额测试', false, e.message); }
+  globalThis.fetch = realFetch;
+}
+
 // ================= 汇总 =================
 console.log('\n===== 汇总 =====');
 const fail = results.filter(r => !r.ok);

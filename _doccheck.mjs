@@ -83,6 +83,13 @@ const STALE = [
   { v: '513e011d6de9', why: '旧 worker.js sha256 前缀' },
   { v: 'fc557e2d7fbc', why: '旧 snippets.js sha256 前缀' },
   { v: '60 行', why: '旧 snippets.js 行数基准' },
+  { v: '31463', why: '旧 snippets.js 字节数（Snippets 平台适配前）' },
+  { v: '312c664da700', why: '旧 snippets.js sha256 前缀' },
+  { v: '93153be9504d', why: '更旧的 snippets.js sha256 前缀（曾漏在 §3.2.1 表内）' },
+  { v: 'cef32273a828', why: '更旧的 worker.js sha256 前缀（曾漏在 §1.2 判定标准内）' },
+  { v: '61 行', why: '旧 snippets.js 行数基准' },
+  { v: '11627', why: '旧 snippets.js 最长行基准' },
+  { v: '347', why: '旧回归项数（Snippets 平台适配前）' },
 ];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
