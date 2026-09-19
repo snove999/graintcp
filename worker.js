@@ -17,8 +17,8 @@ const AD_FILTER = 'telegram|t\\.me|premium'; //订阅生成器推广行过滤正
 const LOGIN_PAGE_TITLE = "Worker Login"; // 修改你的登录页标题
 const DASHBOARD_TITLE = "GrainTCP Worrkers"; //修改你的管理后台标题
 const TG_GROUP_URL = "https://t.me/snove9999";       // 登录页“交流群”链接
-const SITE_URL = "";        // 登录页“天诚网站”链接
-const GITHUB_URL = ""; // 登录页“项目直达”链接
+const SITE_URL = "";        // 登录页链接
+const GITHUB_URL = ""; // 登录页链接
 const PROXY_CHECK_URL = "https://check.proxyip.cmliussss.net/";    // 后台 ProxyIP 检测跳转地址
 
 // --- 订阅转换配置文件 (支持环境变量覆盖) ---
@@ -42,8 +42,8 @@ const P_S5 = 'so'+'cks5';
 
 // ECH + 指纹伪装配置
 let ECH = true;  // ECH 开关 (支持环境变量覆盖)
-let ECH_DNS = 'https://odvr.nic.cz/doh';
-const ECH_DNS_BACKUP = 'https://lh.ddd.oaifree.com/query-dns';
+let ECH_DNS = 'https://223.6.6.6/dns-query';
+const ECH_DNS_BACKUP = 'https://8.8.4.4/query-dns';
 let ECH_SNI = 'cloudflare-ech.com';
 let FP = 'chrome';
 
@@ -3364,7 +3364,7 @@ export default {
       }
       if (flag) {
           // R6：github 全仓无调用方 → 补鉴权彻底收敛（原仅节流，保留登录页直达的收益已无意义）
-          if (flag === 'github') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "github点击", 30)); await sendTgMsg(ctx, env, "🌟 用户点击了烈火项目", r, "来源: 登录页面直达链接", isGlobalAdmin); return new Response(null, { status: 204 }); }
+          if (flag === 'github') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "github点击", 30)); await sendTgMsg(ctx, env, "🌟 用户点击了项目", r, "来源: 登录页面直达链接", isGlobalAdmin); return new Response(null, { status: 204 }); }
           if (flag === 'log_proxy_check') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "检测ProxyIP", 30)); await sendTgMsg(ctx, env, "🔍 用户点击了 ProxyIP 检测", r, "来源: 后台管理面板", isGlobalAdmin); return new Response(null, { status: 204 }); }
           if (flag === 'log_sub_test') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); ctx.waitUntil(logAccessThrottled(env, clientIP, `${city},${country}`, "订阅测试点击", 30)); await sendTgMsg(ctx, env, "🌟 用户点击了订阅测试", r, "来源: 后台管理面板", isGlobalAdmin); return new Response(null, { status: 204 }); }
           if (flag === 'stats') { if (!hasAuthCookie && !isGlobalAdmin) return new Response('403 Forbidden', { status: 403 }); const dateStr = new Date().toISOString().split('T')[0]; const reqCount = await getStoredDailyStats(env, dateStr); const cfStats = await getCloudflareUsage(env); const storageStatus = env.DB ? 'D1 OK' : 'Missing'; const reqLabel = storageStatus === 'Missing' ? 'Internal' : 'API'; const finalReq = storageStatus === 'Missing' ? '不统计' : (cfStats.success ? `${cfStats.total} (${reqLabel})` : `${reqCount} (${reqLabel})`); const cfConfigured = cfStats.success || (!!await getSafeEnv(env, 'CF_EMAIL', "") && !!await getSafeEnv(env, 'CF_KEY', "")); return new Response(JSON.stringify({ req: finalReq, ip: clientIP, loc: `${city}, ${country}`, storageStatus: storageStatus, cfConfigured: cfConfigured }), { headers: { 'Content-Type': 'application/json' } }); }
