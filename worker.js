@@ -32,7 +32,7 @@ const TG_CHAT_ID = ""; //在此修改添加你的telegram 用户id
 const ADMIN_IP = ""; //在此修改添加你的白名单IP
 const DLS = "7"; // ADDCSV 专用：速度下限筛选阈值 (单位 MB/s)
 const SUB_FETCH_TIMEOUT = 10000, SUB_BODY_MAX = 1048576, SUB_SRC_MAX = 20; // 订阅侧外部抓取：超时 / 单响应体上限 / 单类来源条数上限
-const NET = "ws"; // 订阅默认传输：ws | xhttp（env/D1 的 NET 覆盖；?net= 单次覆盖；xhttp 固定 mode=stream-one——本端无 GET 下行）
+const NET = "ws"; // 订阅默认传输：ws | xhttp（env/D1 的 NET 覆盖；?net= 单次覆盖；xhttp 固定 mode=stream-one + padding 混淆 extra——本端无 GET 下行）
 
 // =============================================================================
 // 🟢 超神奇
@@ -42,7 +42,7 @@ const P_S5 = 'so'+'cks5';
 
 // ECH + 指纹伪装配置
 let ECH = true;  // ECH 开关 (支持环境变量覆盖)
-let ECH_DNS = 'https://223.6.6.6/dns-query';
+let ECH_DNS = 'https://odvr.nic.cz/doh';
 const ECH_DNS_BACKUP = 'https://8.8.4.4/query-dns';
 let ECH_SNI = 'cloudflare-ech.com';
 let FP = 'chrome';
@@ -2930,6 +2930,11 @@ XH_R=t=>{try{t&&t.close&&t.close()}catch{}},
 XH_TS=()=>typeof IdentityTransformStream<"u"?new IdentityTransformStream():new TransformStream();
 const XH_HF=[13, 23, 28, 28, 28, 28, 28, 28, 28, 24, 30, 28, 28, 30, 28, 28,28, 28, 28, 28, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 28,6, 10, 10, 12, 13, 6, 8, 11, 10, 10, 8, 11, 8, 6, 6, 6,5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 8, 15, 6, 12, 10,13, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 8, 13, 19, 13, 14, 6,15, 5, 6, 5, 6, 5, 6, 6, 6, 5, 7, 7, 6, 6, 6, 5,6, 7, 6, 5, 5, 6, 7, 7, 7, 7, 7, 15, 11, 14, 13, 28,20, 22, 20, 20, 22, 22, 22, 23, 22, 23, 23, 23, 23, 23, 24, 23,24, 24, 22, 23, 24, 23, 23, 23, 23, 21, 22, 23, 22, 23, 23, 24,22, 21, 20, 22, 22, 23, 23, 21, 23, 22, 22, 24, 21, 22, 23, 23,21, 21, 22, 21, 23, 22, 23, 23, 20, 22, 22, 22, 23, 22, 22, 23,26, 26, 20, 19, 22, 23, 22, 25, 26, 26, 26, 27, 27, 26, 24, 25,19, 21, 26, 27, 27, 26, 27, 24, 21, 21, 26, 26, 28, 27, 27, 27,20, 24, 20, 21, 22, 21, 21, 23, 22, 22, 25, 25, 24, 24, 26, 23,26, 27, 26, 26, 27, 27, 27, 27, 27, 28, 27, 27, 27, 27, 27, 26,30];
 let XH_PDH="",XH_PDK="",XH_B62="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+// padding 头名/键名由 UUID 派生（对齐 EDT `获取叉HTTPPadding标识`）：入站 XH_PDH/XH_PDK 与订阅 extra 共用此一处，防两边漂移
+const XH_pdId=u=>[u.slice(1,7),"_"+u.slice(25,31)],
+// xhttp 节点 extra（EDT 同款字段与顺序）：客户端开 xPaddingObfsMode，padding 改放 XH_PDH 头、tokenish 随机值。
+// Xray ≥ v26.1.31 / mihomo 新版识别；旧内核忽略 → 退回 Referer x_padding，入站 XH_pdChk 无值放行、grpF 首帧回退 xhF，照常可连
+XH_extra=u=>{const[h,k]=XH_pdId(u);return"&extra="+encodeURIComponent(JSON.stringify({xPaddingObfsMode:!0,xPaddingMethod:"tokenish",xPaddingPlacement:"queryInHeader",xPaddingHeader:h,xPaddingKey:k}))};
 const XH_hfLen=t=>{const b=new TextEncoder().encode(t);let n=0;for(let i=0;i<b.length;i++)n+=XH_HF[b[i]];return Math.ceil(n/8)},
 XH_pdGen=n=>{let r="";for(let i=0;i<n;i++)r+=XH_B62[Math.random()*62|0];return r},
 XH_pdChk=e=>{const h=e.headers.get(XH_PDH);let v="";if(h){try{const q=new URL(h,"https://x.invalid").searchParams.get(XH_PDK);v=q||h}catch{v=h}}v=v||new URL(e.url).searchParams.get(XH_PDK)||"";if(!v)return!0;const l=XH_hfLen(v);return l>=98&&l<=1002},
@@ -3008,7 +3013,8 @@ rm=await tryCon(req.fetcher,ss.addrType,hn,ss.port,rc,env)}catch(e2){try{XH_R(rm
 try{const w2=rm.writable.getWriter();try{if(ss.dataOffset<buf.length)await w2.write(buf.subarray(ss.dataOffset))}finally{try{w2.releaseLock()}catch{}}}catch(e3){try{XH_R(rm)}catch{}return new Response("xhERR:"+((e3&&e3.message)||"unknown"),{status:502})}
 // ④ 响应头
 // ④ ACAO：EDT WriteResponseHeader 对齐——有 Origin 则回显（浏览器可带凭据/任意源），否则 XH_HD 的 '*'
-let hh;try{hh=new Headers(XH_HD)}catch{hh=new Headers()}try{const og=req.headers.get('Origin');og&&hh.set('Access-Control-Allow-Origin',og)}catch{}try{const pu=new URL("https://x.invalid/");pu.searchParams.set(XH_PDK,XH_pdGen(100+Math.floor(Math.random()*901)));hh.set(XH_PDH,pu.toString())}catch{}
+// ④ 响应 padding：值取 Xray 服务端 queryInHeader 形态 `?<键>=<随机>`（原 `https://x.invalid/?…` 是全部署一致的固定前缀）；客户端不校验此头
+let hh;try{hh=new Headers(XH_HD)}catch{hh=new Headers()}try{const og=req.headers.get('Origin');og&&hh.set('Access-Control-Allow-Origin',og)}catch{}try{hh.set(XH_PDH,"?"+XH_PDK+"="+XH_pdGen(100+Math.floor(Math.random()*901)))}catch{}
 // ⑤ 上下行：严格对齐 EDT「处理叉HTTP请求」的双 Promise + 自有 AbortController
 //    · 下行：显式 writer 写握手前缀 → releaseLock → 再 pipeTo（不用 pipeTo+preventClose：
 //      该写法依赖运行时对 preventClose 的抑制语义，workerd 的 IdentityTransformStream 与
@@ -3054,7 +3060,7 @@ export default {
       const city = r.cf?.city || 'Unknown';
 
       const _UUID = env.KEY ? await getDynamicUUID(env.KEY, env.UUID_REFRESH || 86400) : (await getSafeEnv(env, 'UUID', UUID));
-      setUUID(_UUID);XH_PDH=_UUID.slice(1,7);XH_PDK="_"+_UUID.slice(25,31);
+      setUUID(_UUID);[XH_PDH,XH_PDK]=XH_pdId(_UUID);
       const _WEB_PW = await getSafeEnv(env, 'WEB_PASSWORD', WEB_PASSWORD);
       const _SUB_PW = await getSafeEnv(env, 'SUB_PASSWORD', SUB_PASSWORD);
       // P1-3：默认弱口令「告警不阻断」——命中默认值时面板横幅 + TG 一次性通知（绝不拒绝启动）
@@ -3436,7 +3442,7 @@ export default {
           // 构造上游 subUrl：同时兼容 Desire 与 workerVless2sub 参数契约
           let _subUrl;
           {
-              const _workerSubParams = `uuid=${_UUID}&${'enc'+'ryption'}=none&${'secu'+'rity'}=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}`;
+              const _workerSubParams = `uuid=${_UUID}&${'enc'+'ryption'}=none&${'secu'+'rity'}=tls&sni=${host}&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}`;
               if (_SUB_TOKEN) {
                   const _desireIPs = await getCustomIPs(env, _DLS, url, r, false);
                   const _desireIP = (_desireIPs[0] || _PROXY_IP || host);
@@ -3583,9 +3589,14 @@ export default {
                     if (/fp=/i.test(line)) {
                       line = line.replace(/fp=[^&#]+/i, 'fp=' + FP);
                     }
-                    // NET=xhttp：上游生成器套的是 ws 模板，仅对含本端 UUID 的行改写为 xhttp + stream-one（透传的外来节点不动）
+                    // alpn 交给客户端自行协商：剔除上游模板自带的 alpn（只动 # 之前的查询串，备注里的同名文本不碰）
+                    {
+                      const hashIdx = line.indexOf('#'), q = hashIdx < 0 ? line : line.slice(0, hashIdx);
+                      line = q.replace(/([?&])alpn=[^&]*(&?)/i, (m, p, t) => t ? p : '') + (hashIdx < 0 ? '' : line.slice(hashIdx));
+                    }
+                    // NET=xhttp：上游生成器套的是 ws 模板，仅对含本端 UUID 的行改写为 xhttp + stream-one + padding 混淆 extra（透传的外来节点不动）
                     if (_net === 'xhttp' && line.includes(_UUID) && /[?&]type=ws(?=&|#|$)/i.test(line) && !/[?&]mode=/i.test(line)) {
-                      line = line.replace(/([?&])type=ws(?=&|#|$)/i, '$1type=xhttp&mode=stream-one');
+                      line = line.replace(/([?&])type=ws(?=&|#|$)/i, '$1type=xhttp&mode=stream-one' + XH_extra(_UUID));
                     }
                     // PS 后缀
                     if (_PS) {
@@ -3836,7 +3847,8 @@ function genNodes(host, uuid, proxyIP, customIPs, psName, pipSet, fragQ = '', ne
   if (ECH && !bare) {
     echParam = `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}`;
   }
-  const commonUrlPart = `?enc`+`ryption=none&secu`+`rity=tls&sni=${host}&fp=${FP}&alpn=h3&type=${net === 'xhttp' ? 'xhttp' : 'ws'}&host=${host}` + (net === 'xhttp' ? '&mode=stream-one' : '') + echParam;
+  // 不写 alpn：交给客户端自行协商（xhttp 默认走 h2）；xhttp 附 padding 混淆 extra（bare 哨兵输出与 ECH 一样不带）
+  const commonUrlPart = `?enc`+`ryption=none&secu`+`rity=tls&sni=${host}&fp=${FP}&type=${net === 'xhttp' ? 'xhttp' : 'ws'}&host=${host}` + (net === 'xhttp' ? '&mode=stream-one' + (bare ? '' : XH_extra(uuid)) : '') + echParam;
   const separator = psName ? ` ${psName}` : '';
   const result = [];
   if (!customIPs || customIPs.length === 0) {
@@ -4373,7 +4385,7 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, 
     // P1-3：弱口令告警横幅（仅展示，绝不阻断）
     const weakBanner = weakPw ? `<div style="position:relative;z-index:9999;padding:12px 16px;background:linear-gradient(90deg,#7f1d1d,#b91c1c);color:#fff;font-size:14px;text-align:center;font-weight:600;">⚠️ 安全告警：检测到仍在使用默认口令（WEB_PASSWORD / SUB_PASSWORD），请立即修改，否则面板与订阅可被任意访问。</div>` : '';
     const pathParam = proxyip ? "/proxyip=" + proxyip : "/";
-    const linkParams = `${'enc'+'ryption'}=none&${'secu'+'rity'}=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}` : '');
+    const linkParams = `${'enc'+'ryption'}=none&${'secu'+'rity'}=tls&sni=${host}&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}` : '');
     const regularLongLink = `https://${subdomain}/sub?uuid=${uuid}&${linkParams}`;
     const baseNode = `${'vl'+'ess'}://${uuid}@${host}:443?${linkParams}#Worker`;
     const longLink = subToken
@@ -6758,7 +6770,6 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, subToken, 
             search.set('enc'+'ryption', 'none');
             search.set('secu'+'rity', 'tls');
             search.set('sni', host);
-            search.set('alpn', 'h3');
             const _echOn = document.getElementById('echSwitch')?.checked;
             search.set('fp', 'chrome');
             search.set('allowInsecure', '0');

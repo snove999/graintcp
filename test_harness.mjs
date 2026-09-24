@@ -158,6 +158,12 @@ function check(name, cond, detail = '') {
 // snippets UUID 提取：明文版走首行正则；混淆版字符串进数组后回退到当前配置常量
 const SNIP_UUID_FALLBACK = 'd675a8ea-61bc-4db9-a8a6-109ca1ec8385';
 const extractUuid = (line) => (line.match(/UUID="([^"]+)"/) || [0, SNIP_UUID_FALLBACK])[1];
+// xhttp 节点 extra（padding 混淆）断言：字段与 EDT 一致，头名/键名须由该 UUID 派生（与入站 PDH/PDK 同源）；
+// 订阅文本可能已被 unb64 整体 URL 解码过，故对捕获值再 decode 一次（已解码的 JSON 不含 %，decode 为恒等）
+const extraOf = (line) => { const m = String(line).match(/[?&]extra=([^&#]+)/); if (!m) return null; try { return JSON.parse(decodeURIComponent(m[1])); } catch { return null; } };
+const extraOk = (line, uuid) => { const j = extraOf(line); return !!j && j.xPaddingObfsMode === true && j.xPaddingMethod === 'tokenish' && j.xPaddingPlacement === 'queryInHeader' && j.xPaddingHeader === uuid.slice(1, 7) && j.xPaddingKey === '_' + uuid.slice(25, 31); };
+// 响应 padding 头：Xray 服务端 queryInHeader 形态 `?<键>=<base62 100–1000>`，不得带固定前缀（原 https://x.invalid/）
+const padHdrOk = (v, uuid) => { const k = '_' + uuid.slice(25, 31); if (!v.startsWith('?' + k + '=')) return false; const p = v.slice(k.length + 2); return /^[0-9A-Za-z]{100,1000}$/.test(p); };
 
 async function loadWorker() {
   const src = readFileSync(DIR + 'worker.js', 'utf8');
@@ -461,9 +467,12 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     const lineX = textX.split('\n').find(l => l.includes('212.147.249.131')) || '';
     check('snippets ?net=xhttp：重建节点 type=xhttp + mode=stream-one + path/host/sni 完整', /type=xhttp&/.test(lineX) && lineX.includes('mode=stream-one') && lineX.includes('sni=w.test') && lineX.includes('host=w.test') && /path=[^&#]+/.test(lineX), lineX.slice(0, 160));
     check('snippets ?net=xhttp：透传外来节点不被改写', textX.includes('vless://11111111-2222-4333-8444-555555555555@1.2.3.4:443'), 'yes');
+    check('snippets ?net=xhttp：重建节点带 padding 混淆 extra（头/键由 UUID 派生）', extraOk(lineX, snipUuid), lineX.slice(0, 260));
+    check('snippets NET=ws 默认：重建节点不带 extra', !text.includes('extra='), text.split('\n')[1]?.slice(0, 120));
     const resF = await SN.default.fetch(stubRequest('https://w.test/sub?uuid=' + snipUuid + '&net=xhttp&flag=true', {}), undefined, { waitUntil() {} });
     const textF = Buffer.from(await resF.text(), 'base64').toString('utf8');
     check('snippets flag=true（转换器回源）忽略 net=xhttp，恒 ws', /type=ws&/.test(textF) && !textF.includes('xhttp'), textF.split('\n')[1]?.slice(0, 100));
+    check('snippets flag=true（转换器回源）不带 extra', !textF.includes('extra='), textF.split('\n')[1]?.slice(0, 100));
   } catch (e) { check('snippets 生成器契约测试', false, e.message); }
 
   // worker：/123456（默认订阅密码）走路径B
@@ -596,6 +605,11 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     check('snippets xHTTP：合法 padding 放行 200', r2.status === 200, String(r2.status));
     const padH = r2.headers.get(pdh) || '';
     check('snippets xHTTP：响应携带随机 padding 头', padH.length >= 100 && padH.length <= 1100, `len=${padH.length}`);
+    check('snippets xHTTP：响应 padding 头为 ?<键>=<base62>，无固定前缀', padH.length > 0 && padHdrOk(padH, snipUuid4), padH.slice(0, 40));
+    const stok = Array.from({ length: 400 }, () => '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'[Math.random() * 62 | 0]).join('');
+    const rObfs = await SN4.default.fetch(mkReq('https://w.test/xh/?_' + snipUuid4.slice(25, 31) + '=' + stok), undefined, { waitUntil() {} });
+    check('snippets xHTTP：Xray obfs 形态 padding（URL 头 + tokenish）放行 200', rObfs.status === 200, String(rObfs.status));
+    try { ctrl4 && ctrl4.close(); } catch {}
     check('snippets xHTTP：响应含 no-store', r2.headers.get('cache-control') === 'no-store', String(r2.headers.get('cache-control')));
     const r3 = await SN4.default.fetch(mkReq('', 'speed.cloudflare.com'), undefined, { waitUntil() {} });
     const b3 = new Uint8Array(await r3.arrayBuffer());
@@ -642,10 +656,18 @@ console.log('\n===== EDT 2.1 生成器契约测试 =====');
     check('worker xHTTP：VLESS 应答前缀 [0,0]', wfirst.value && wfirst.value[0] === 0 && wfirst.value[1] === 0, JSON.stringify(wfirst.value && Array.from(wfirst.value.slice(0, 2))));
     const wpadH = wres.headers.get(wpdh) || '';
     check('worker xHTTP：响应随机 padding 头', wpadH.length >= 100 && wpadH.length <= 1100, `len=${wpadH.length}`);
+    check('worker xHTTP：响应 padding 头为 ?<键>=<base62>，无固定前缀', padHdrOk(wpadH, wUuid), wpadH.slice(0, 40));
     // padding 短值拒绝
     const wbad = new ReadableStream({ start(c) { c.enqueue(wframe); c.close(); } });
     const wres2 = await WK.default.fetch({ url: 'https://w.test/xh2', method: 'POST', headers: { get: k => ({ 'content-type': 'application/grpc', [wpdh]: 'abc' })[k.toLowerCase()] ?? null }, body: wbad, cf: {}, fetcher: wreq.fetcher }, {}, { waitUntil() {} });
     check('worker xHTTP：短 padding 拒绝 400', wres2.status === 400, String(wres2.status));
+    // Xray 客户端 xPaddingObfsMode 实发形态（queryInHeader：头值 = 完整请求 URL + ?<键>=<tokenish base62>）→ 放行，且判定为 xHTTP（不进 gRPC 回退）
+    const wpdk = '_' + wUuid.slice(25, 31), B62T = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    const wtok = Array.from({ length: 400 }, () => B62T[Math.random() * 62 | 0]).join('');
+    const wobfsH = { 'content-type': 'application/grpc', [wpdh]: 'https://w.test/xh4/?' + wpdk + '=' + wtok };
+    const wobfsGet = k => wobfsH[k.toLowerCase()] ?? null;
+    const wresO = await WK.default.fetch({ url: 'https://w.test/xh4/', method: 'POST', headers: { get: wobfsGet }, body: new ReadableStream({ start(c) { c.enqueue(wframe); c.close(); } }), cf: {}, fetcher: wreq.fetcher }, {}, { waitUntil() {} });
+    check('worker xHTTP：Xray obfs 形态 padding（URL 头 + tokenish）放行 200 且判定为 xHTTP', wresO.status === 200 && WK.XH_isGrpc({ url: 'https://w.test/xh4/', headers: { get: wobfsGet } }) === false, String(wresO.status));
     // UDP cmd=2 拒绝
     connectLog = [];
     const frU2 = vlessFrame(wUuid, 'udp2.org', 53);
@@ -1513,6 +1535,14 @@ console.log('\n===== 批次 7 EDT 对齐 =====');
   resetCfg3();
   { const d = await subOf({ ...ADD2, NET: 'xhttp' }); check('NET=xhttp：节点 type=xhttp&mode=stream-one（每行）', d.split('\n').filter(Boolean).every(l => l.includes('type=xhttp&host=') && l.includes('&mode=stream-one')), d.slice(0, 160)); }
   resetCfg3();
+  {
+    const d = await subOf({ ...ADD2, NET: 'xhttp' }), ls = d.split('\n').filter(Boolean);
+    check('NET=xhttp：每行带 padding 混淆 extra，头/键与入站同源（UUID 派生）', ls.length > 0 && ls.every(l => extraOk(l, UUID0)), d.slice(0, 260));
+    check('NET=xhttp：节点不写 alpn（客户端自行协商）', !/[?&]alpn=/.test(d), d.slice(0, 160));
+  }
+  resetCfg3();
+  { const d = await subOf(ADD2); check('NET=ws：节点不带 extra、不写 alpn', !d.includes('extra=') && !/[?&]alpn=/.test(d), d.slice(0, 160)); }
+  resetCfg3();
   { const d = await subOfUrl({ ...ADD2, NET: 'xhttp' }, 'https://w.test/sub?uuid=' + UUID0 + '&net=ws'); check('NET=xhttp + ?net=ws → 本次 ws', /type=ws&/.test(d) && !d.includes('xhttp'), d.slice(0, 120)); }
   resetCfg3();
   { const d = await subOfUrl(ADD2, 'https://w.test/sub?uuid=' + UUID0 + '&net=xhttp'); check('NET 未配 + ?net=xhttp → 本次 xhttp', /type=xhttp&/.test(d) && d.includes('mode=stream-one'), d.slice(0, 120)); }
@@ -1525,13 +1555,28 @@ console.log('\n===== 批次 7 EDT 对齐 =====');
   resetCfg3();
   {
     // 路径 B：上游生成器返回 ws 模板行（含本端 UUID）+ 外来节点行 → 仅本端行改写
+    // 两行都带 alpn=h3：本端行须剔除（中间位置），外来行须原样保留
     const save = globalThis.fetch;
-    const up = 'vless://' + UUID0 + '@1.2.3.4:443?encryption=none&security=tls&type=ws&host=w.test&path=%2F#mine\nvless://11111111-2222-4333-8444-555555555555@5.6.7.8:443?encryption=none&security=tls&type=ws&host=x.test#other';
+    const up = 'vless://' + UUID0 + '@1.2.3.4:443?encryption=none&security=tls&alpn=h3&type=ws&host=w.test&path=%2F#mine\nvless://11111111-2222-4333-8444-555555555555@5.6.7.8:443?encryption=none&security=tls&alpn=h3&type=ws&host=x.test#other';
     globalThis.fetch = async (u) => { const s = String((u && u.url) || u); if (s.includes('/sub?host=example.com')) return new RealResponse('nope', { status: 500 }); if (s.includes('gen.test/sub?')) return new RealResponse(btoa(up), { status: 200 }); return new RealResponse('nf', { status: 404 }); };
     try {
       const d = await subOfUrl({ NET: 'xhttp', SUB_DOMAIN: 'gen.test' }, 'https://w.test/123456');
       const mine = d.split('\n').find(l => l.includes(UUID0)) || '', other = d.split('\n').find(l => l.includes('11111111-2222')) || '';
       check('NET=xhttp 路径 B：上游 ws 行（本端 UUID）改写为 xhttp+stream-one，外来行不动', mine.includes('type=xhttp&mode=stream-one') && other.includes('type=ws') && !other.includes('xhttp'), (mine + ' | ' + other).slice(0, 200));
+      check('NET=xhttp 路径 B：本端行补 padding 混淆 extra（头/键由 UUID 派生）', extraOk(mine, UUID0), mine.slice(0, 260));
+      check('NET=xhttp 路径 B：本端行剔除 alpn 且无 &&/?& 残留，外来行 alpn 原样保留', !/[?&]alpn=/.test(mine) && !/[?&]&|&#/.test(mine) && mine.includes('security=tls&type=xhttp') && other.includes('&alpn=h3&') && !extraOf(other), (mine + ' | ' + other).slice(0, 220));
+    } finally { globalThis.fetch = save; }
+  }
+  resetCfg3();
+  {
+    // 路径 B · ws：本端行 alpn 在查询串末尾（紧贴 #）也须剔除；ws 行不带 extra
+    const save = globalThis.fetch;
+    const up = 'vless://' + UUID0 + '@1.2.3.4:443?encryption=none&security=tls&type=ws&host=w.test&path=%2F&alpn=h3#mine';
+    globalThis.fetch = async (u) => { const s = String((u && u.url) || u); if (s.includes('/sub?host=example.com')) return new RealResponse('nope', { status: 500 }); if (s.includes('gen.test/sub?')) return new RealResponse(btoa(up), { status: 200 }); return new RealResponse('nf', { status: 404 }); };
+    try {
+      const d = await subOfUrl({ SUB_DOMAIN: 'gen.test' }, 'https://w.test/123456');
+      const mine = d.split('\n').find(l => l.includes(UUID0)) || '';
+      check('NET=ws 路径 B：本端行末尾 alpn 剔除、# 备注保留、不带 extra', /type=ws&/.test(mine) && !/[?&]alpn=/.test(mine) && !/&#/.test(mine) && /path=[^&#]+#mine$/.test(mine) && !mine.includes('extra='), mine.slice(0, 200));
     } finally { globalThis.fetch = save; }
   }
 

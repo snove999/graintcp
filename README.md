@@ -3,13 +3,13 @@
 Cloudflare 上的 VLESS 代理，两种部署形态：**Workers**（全功能：管理面板、D1 持久化、TG 用量推送）和 **Snippets**（轻量：仅代理与订阅，付费计划的规则引擎）。内核来自 [ToiCF/GrainTCP](https://github.com/ToiCF/GrainTCP)，路径语法、订阅契约与 [cmliu/edgetunnel](https://github.com/cmliu/edgetunnel) 生态兼容。
 
 <!-- doccheck:baseline
-harness_total=420
-file.worker.js.bytes=441352
-file.worker.js.sha256_12=f1457ea5a169
-file.snippets.js.bytes=32323
-file.snippets.js.sha256_12=5a0c770dd742
-file.worker.obf.js.bytes=1022615
-file.worker.obf.js.sha256_12=11681b747f55
+harness_total=433
+file.worker.js.bytes=442720
+file.worker.js.sha256_12=9324c393f0c1
+file.snippets.js.bytes=32422
+file.snippets.js.sha256_12=1bdd9aee5c1a
+file.worker.obf.js.bytes=1016294
+file.worker.obf.js.sha256_12=4f89f66fb3f8
 -->
 
 ## 选哪个
@@ -38,11 +38,11 @@ file.worker.obf.js.sha256_12=11681b747f55
 2. 改文件第 1 行：`UUID`、`SUB_PWD`（订阅密码路径）、`SRQ`（你的计划的子请求配额：Pro 2 / Business 3 / Enterprise 5）、`NET`（订阅默认传输 `ws` 或 `xhttp`）。
 3. 订阅地址：`https://你的域名/sub?uuid=你的UUID` 或 `https://你的域名/你的SUB_PWD`。
 
-官方限额：包体 32KB、CPU 5ms、内存 2MB、无环境变量。当前 `snippets.js` 32323B。
+官方限额：包体 32KB、CPU 5ms、内存 2MB、无环境变量。当前 `snippets.js` 32422B。
 
 ## 订阅
 
-- 追加 `?net=xhttp` 或 `?net=ws` 可单次切换传输；xhttp 节点固定 `mode=stream-one`，仅 Xray 系客户端（v2rayN / v2rayNG / Shadowrocket 等）支持。
+- 追加 `?net=xhttp` 或 `?net=ws` 可单次切换传输；xhttp 节点固定 `mode=stream-one`，并附 EDT 同款 padding 混淆 `extra`（头/键由 UUID 派生，Xray ≥ v26.1.31 / mihomo 新版识别，旧内核忽略也能连），仅 Xray 系客户端（v2rayN / v2rayNG / Shadowrocket 等）支持。节点不写 `alpn`，由客户端自行协商（xhttp 默认 h2）。
 - clash / mihomo / sing-box / surge 等按 UA 自动走订阅转换，输出恒为 ws。
 - 在节点路径里写出口：`/proxyip=host:port`、`/s5=user:pass@host:port`、`/socks5://…`（全局）、`/gs5=`（g 前缀 = 全局）、`?global=1`。完整语法见参考手册。
 
