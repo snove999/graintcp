@@ -42,8 +42,7 @@ file.worker.obf.js.sha256_12=4f89f66fb3f8
 
 ## 订阅
 
-- 追加 `?net=xhttp` 或 `?net=ws` 可单次切换传输；xhttp 节点固定 `mode=stream-one`，并附 EDT 同款 padding 混淆 `extra`（头/键由 UUID 派生，Xray ≥ v26.1.31 / mihomo 新版识别，旧内核忽略也能连），仅 Xray 系客户端（v2rayN / v2rayNG / Shadowrocket 等）支持。节点不写 `alpn`，由客户端自行协商（xhttp 默认 h2）。
-- clash / mihomo / sing-box / surge 等按 UA 自动走订阅转换，输出恒为 ws。
+- 追加 `?net=xhttp` 或 `?net=ws` 可单次切换传输；xhttp
 - 在节点路径里写出口：`/proxyip=host:port`、`/s5=user:pass@host:port`、`/socks5://…`（全局）、`/gs5=`（g 前缀 = 全局）、`?global=1`。完整语法见参考手册。
 
 ## 更多文档
