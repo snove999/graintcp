@@ -27,8 +27,17 @@ file.worker.obf.js.sha256_12=4f89f66fb3f8
 
 1. Cloudflare Dashboard → **Workers & Pages → Create → Worker**，把 `worker.obf.js` 全文粘贴进去，Deploy。
 2. **Settings → Variables** 添加 `UUID`（标准 UUID 格式）。这是唯一必填项。
-3. 想要面板：建一个 D1 数据库并绑定到 Worker，变量名 **`DB`**，在 D1 Console 执行 [schema.sql](schema.sql)。面板地址 `https://你的域名/`，默认口令 `abc`，请改 `WEB_PASSWORD`。
-4. 订阅地址：`https://你的域名/sub?uuid=你的UUID`，或 `https://你的域名/你的SUB_PASSWORD`（默认 `123456`）。
+3. 想要面板：建一个 D1 数据库并绑定到 Worker，变量名 **`DB`**，在 D1 Console 执行
+
+  ```sql
+   CREATE TABLE IF NOT EXISTS config    (key TEXT PRIMARY KEY, value TEXT);
+   CREATE TABLE IF NOT EXISTS whitelist (ip TEXT PRIMARY KEY, created_at TEXT);
+   CREATE TABLE IF NOT EXISTS logs      (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT, ip TEXT, region TEXT, action TEXT);
+   CREATE TABLE IF NOT EXISTS stats     (date TEXT PRIMARY KEY, count INTEGER);
+   ```
+
+面板地址 `https://你的域名/`，默认口令 `abc`，请改 `WEB_PASSWORD`。
+6. 订阅地址：`https://你的域名/sub?uuid=你的UUID`，或 `https://你的域名/你的SUB_PASSWORD`（默认 `123456`）。
 
 用 wrangler 的话：把 [wrangler.jsonc](wrangler.jsonc) 里的 D1 `database_id` 换成你的，然后 `wrangler secret put UUID` → `wrangler deploy`。
 
