@@ -16,7 +16,7 @@ file.worker.obf.js.sha256_12=4f89f66fb3f8
 
 | | Workers | Snippets |
 |---|---|---|
-| 部署件 | `worker.obf.js`（混淆版；`worker.js` 为明文源码，仅排障） | `snippets.js` |
+| 部署件 | `worker.obf.js`（混淆版；`worker.js` 为明文源码） | `snippets.obf.js（混淆版；`snippets.js` 为明文源码）` |
 | 计划 | Free 即可 | 付费计划（Pro 及以上） |
 | 面板 / D1 / TG 推送 | 有 | 无 |
 | 传输 | WebSocket · xHTTP · gRPC | WebSocket · xHTTP · gRPC |
