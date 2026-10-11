@@ -16,7 +16,7 @@ file.worker.obf.js.sha256_12=4f89f66fb3f8
 
 | | Workers | Snippets |
 |---|---|---|
-| 部署件 | `worker.obf.js`（混淆版；`worker.js` 为明文源码） | `snippets.obf.js（混淆版；`snippets.js` 为明文源码）` |
+| 部署件 | `worker.obf.js`（混淆版；`worker.js` 为明文源码） | `snippets.obf.js`（混淆版；`snippets.js` 为明文源码） |
 | 计划 | Free 即可 | 付费计划（Pro 及以上） |
 | 面板 / D1 / TG 推送 | 有 | 无 |
 | 传输 | WebSocket · xHTTP · gRPC | WebSocket · xHTTP · gRPC |
@@ -47,7 +47,7 @@ file.worker.obf.js.sha256_12=4f89f66fb3f8
 2. 改文件第 1 行：`UUID`、`SUB_PWD`（订阅密码路径）、`SRQ`（你的计划的子请求配额：Pro 2 / Business 3 / Enterprise 5）、`NET`（订阅默认传输 `ws` 或 `xhttp`）。
 3. 订阅地址：`https://你的域名/sub?uuid=你的UUID` 或 `https://你的域名/你的SUB_PWD`。
 
-官方限额：包体 32KB、CPU 5ms、内存 2MB、无环境变量。当前 `snippets.js` 32422B。
+官方限额：包体 32KB、CPU 5ms、内存 2MB、无环境变量。
 
 ## 订阅
 
