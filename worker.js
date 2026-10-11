@@ -40,14 +40,14 @@ let UUID = "06b65903-406d-4a41-8463-6fd5c0ee7798"; //修改可用的uuid
 const WEB_PASSWORD = "abc";  //修改你的登录密码
 const SUB_PASSWORD = "123456";  //修改你的订阅密码
 const SUB_TOKEN = "";  //ST裂变Token，留空不启用，支持环境变量 SUB_TOKEN 覆盖
-const DEFAULT_PROXY_IP = "P"+"r"+"o"+"x"+"y"+"I"+"P"+".C"+"M"+"L"+"i"+"U"+"s"+"s"+"s"+"s"+".n"+"e"+"t"; //单个反代地址
-const DEFAULT_SUB_DOMAIN = 'https://owo.o00o.ooo'; //单个sub优选订阅
+const DEFAULT_PROXY_IP = "P"+"r"+"o"+"x"+"y"+"I"+"P"+".C"+"M"+"L"+"i"+"u"+"s"+"s"+"s"+"s"+".n"+"e"+"t"; //单个反代地址
+const DEFAULT_SUB_DOMAIN = 'https://owo.o00o.ooo/'; //单个sub优选订阅
 const DEFAULT_CONVERTER = "https://subapi." + _C_UPSITE + ".net"; //转换后端api
 const AD_FILTER = 'telegram|t\\.me|premium'; //订阅生成器推广行过滤正则（正则源字符串，命中哨兵行直接丢弃；环境变量 AD_FILTER 可覆盖，如 'telegram|promo\\.example'）
 
 // --- 界面与链接配置 ---
 const LOGIN_PAGE_TITLE = "Worker Login"; // 修改你的登录页标题
-const DASHBOARD_TITLE = _C_PROJ + " Worker"; //修改你的管理后台标题
+const DASHBOARD_TITLE = _C_PROJ + " Worrkers"; //修改你的管理后台标题
 const TG_GROUP_URL = "https://t.me/snove9999";       // 登录页“交流群”链接
 const SITE_URL = "";        // 登录页链接
 const GITHUB_URL = ""; // 登录页链接
@@ -7115,8 +7115,8 @@ function dashPage(host, uuid, _pipArg, subpass, subdomain, converter, subToken, 
             var requestIp = String(ip || '').trim();
             if (!requestIp) return Promise.reject(new Error('missing ip'));
             var apis = [
-                { name: '${_C_BRAND_LO}-eo', url: '${_C_UPAPI}ip= + encodeURIComponent(requestIp) },
-                { name: '${_C_BRAND_LO}-cf', url: '${_C_UPIPSB}ip= + encodeURIComponent(requestIp) }
+                { name: '${_C_BRAND_LO}-eo', url: '${_C_UPAPI}ip=' + encodeURIComponent(requestIp) },
+                { name: '${_C_BRAND_LO}-cf', url: '${_C_UPIPSB}ip=' + encodeURIComponent(requestIp) }
             ];
             var tasks = apis.map(function(api) {
                 return fetchWithTimeout(api.url, { cache: 'no-store' }).then(function(res) {
