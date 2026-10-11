@@ -1,41 +1,5 @@
 
 // =============================================================================
-// 🟣 1. 用户配置区域 (优先级: 环境变量 > D1 > 硬编码)
-// =============================================================================
-
-// --- 基础账号与网络配置 ---
-let UUID = "06b65903-406d-4a41-8463-6fd5c0ee7798"; //修改可用的uuid
-const WEB_PASSWORD = "abc";  //修改你的登录密码
-const SUB_PASSWORD = "123456";  //修改你的订阅密码
-const SUB_TOKEN = "";  //ST裂变Token，留空不启用，支持环境变量 SUB_TOKEN 覆盖
-const DEFAULT_PROXY_IP = "P"+"r"+"o"+"x"+"y"+"I"+"P"+".C"+"M"+"L"+"i"+"U"+"s"+"s"+"s"+"s"+".n"+"e"+"t"; //单个反代地址
-const DEFAULT_SUB_DOMAIN = 'https://owo.o00o.ooo/'; //单个sub优选订阅
-const DEFAULT_CONVERTER = "https://subapi." + _C_UPSITE + ".net"; //转换后端api
-const AD_FILTER = 'telegram|t\\.me|premium'; //订阅生成器推广行过滤正则（正则源字符串，命中哨兵行直接丢弃；环境变量 AD_FILTER 可覆盖，如 'telegram|promo\\.example'）
-
-// --- 界面与链接配置 ---
-const LOGIN_PAGE_TITLE = "Worker Login"; // 修改你的登录页标题
-const DASHBOARD_TITLE = _C_PROJ + " Worker"; //修改你的管理后台标题
-const TG_GROUP_URL = "https://t.me/snove9999";       // 登录页“交流群”链接
-const SITE_URL = "";        // 登录页链接
-const GITHUB_URL = ""; // 登录页链接
-const PROXY_CHECK_URL = "https://check." + _C_PXIP + "." + _C_UPSITE + ".net/";    // 后台反代出口检测跳转地址
-
-// --- 订阅转换配置文件 (支持环境变量覆盖) ---
-const CONV_CFG_A = "https://" + _C_GHRAW + "/" + _C_UPID + "/" + _C_RULESET + "/main/" + _C_FMT_A_CAP + "/config/" + _C_RULESET + "_Online_Full_MultiMode.ini"; //修改转换订阅配置文件ini
-const CONV_CFG_C = "https://" + _C_GHRAW + "/sinspired/" + _C_TPL_REPO + "-template/main/1.12.x/" + _C_FMT_B + ".json"; //修改订阅格式的json配置，默认使用1.11，如果无法使用才会切换1.12
-const CONV_CFG_B = "https://" + _C_GHRAW + "/sinspired/" + _C_TPL_REPO + "-template/main/1.11.x/" + _C_FMT_B + ".json"; //修改订阅格式的json配置，默认使用这个，如果无法使用才会切换1.12
-
-// --- 通知与高级参数 ---
-const TG_BOT_TOKEN = ""; //在此telegram bot的token令牌
-const TG_CHAT_ID = ""; //在此修改添加你的telegram 用户id
-const ADMIN_IP = ""; //在此修改添加你的白名单IP
-const DLS = "7"; // ADDCSV 专用：速度下限筛选阈值 (单位 MB/s)
-const SUB_FETCH_TIMEOUT = 10000, SUB_BODY_MAX = 1048576, SUB_SRC_MAX = 20; // 订阅侧外部抓取：超时 / 单响应体上限 / 单类来源条数上限
-const NET = "ws"; // 订阅默认传输：ws | xhttp（env/D1 的 NET 覆盖；?net= 单次覆盖；xhttp 固定 mode=stream-one + padding 混淆 extra——本端无 GET 下行）
-
-// =============================================================================
-// =============================================================================
 // 🔴 查杀特征码：下列常量一律以「单字符相加」方式构造，源码不出现完整标识串。
 //     运行期值与原生字面量逐字节一致，逻辑与输出完全等价。
 // =============================================================================
@@ -67,6 +31,42 @@ const _C_KEY_B    = "S"+"I"+"N"+"G"+"B"+"O"+"X";                                
 const _C_RULESET  = "A"+"C"+"L"+"4"+"S"+"S"+"R";                                                         // 规则集标识
 const _C_TPL_REPO = "s"+"u"+"b"+"-"+"s"+"t"+"o"+"r"+"e";                                                 // 模板仓库标识                                                 // 上游按机房兜底域
 
+// =============================================================================
+// 🟣 1. 用户配置区域 (优先级: 环境变量 > D1 > 硬编码)
+// =============================================================================
+
+// --- 基础账号与网络配置 ---
+let UUID = "06b65903-406d-4a41-8463-6fd5c0ee7798"; //修改可用的uuid
+const WEB_PASSWORD = "abc";  //修改你的登录密码
+const SUB_PASSWORD = "123456";  //修改你的订阅密码
+const SUB_TOKEN = "";  //ST裂变Token，留空不启用，支持环境变量 SUB_TOKEN 覆盖
+const DEFAULT_PROXY_IP = "P"+"r"+"o"+"x"+"y"+"I"+"P"+".C"+"M"+"L"+"i"+"U"+"s"+"s"+"s"+"s"+".n"+"e"+"t"; //单个反代地址
+const DEFAULT_SUB_DOMAIN = 'https://owo.o00o.ooo'; //单个sub优选订阅
+const DEFAULT_CONVERTER = "https://subapi." + _C_UPSITE + ".net"; //转换后端api
+const AD_FILTER = 'telegram|t\\.me|premium'; //订阅生成器推广行过滤正则（正则源字符串，命中哨兵行直接丢弃；环境变量 AD_FILTER 可覆盖，如 'telegram|promo\\.example'）
+
+// --- 界面与链接配置 ---
+const LOGIN_PAGE_TITLE = "Worker Login"; // 修改你的登录页标题
+const DASHBOARD_TITLE = _C_PROJ + " Worker"; //修改你的管理后台标题
+const TG_GROUP_URL = "https://t.me/snove9999";       // 登录页“交流群”链接
+const SITE_URL = "";        // 登录页链接
+const GITHUB_URL = ""; // 登录页链接
+const PROXY_CHECK_URL = "https://check." + _C_PXIP + "." + _C_UPSITE + ".net/";    // 后台反代出口检测跳转地址
+
+// --- 订阅转换配置文件 (支持环境变量覆盖) ---
+const CONV_CFG_A = "https://" + _C_GHRAW + "/" + _C_UPID + "/" + _C_RULESET + "/main/" + _C_FMT_A_CAP + "/config/" + _C_RULESET + "_Online_Full_MultiMode.ini"; //修改转换订阅配置文件ini
+const CONV_CFG_C = "https://" + _C_GHRAW + "/sinspired/" + _C_TPL_REPO + "-template/main/1.12.x/" + _C_FMT_B + ".json"; //修改订阅格式的json配置，默认使用1.11，如果无法使用才会切换1.12
+const CONV_CFG_B = "https://" + _C_GHRAW + "/sinspired/" + _C_TPL_REPO + "-template/main/1.11.x/" + _C_FMT_B + ".json"; //修改订阅格式的json配置，默认使用这个，如果无法使用才会切换1.12
+
+// --- 通知与高级参数 ---
+const TG_BOT_TOKEN = ""; //在此telegram bot的token令牌
+const TG_CHAT_ID = ""; //在此修改添加你的telegram 用户id
+const ADMIN_IP = ""; //在此修改添加你的白名单IP
+const DLS = "7"; // ADDCSV 专用：速度下限筛选阈值 (单位 MB/s)
+const SUB_FETCH_TIMEOUT = 10000, SUB_BODY_MAX = 1048576, SUB_SRC_MAX = 20; // 订阅侧外部抓取：超时 / 单响应体上限 / 单类来源条数上限
+const NET = "ws"; // 订阅默认传输：ws | xhttp（env/D1 的 NET 覆盖；?net= 单次覆盖；xhttp 固定 mode=stream-one + padding 混淆 extra——本端无 GET 下行）
+
+// =============================================================================
 // =============================================================================
 // 🟢 超神奇
 const P_V = _C_VLS;
